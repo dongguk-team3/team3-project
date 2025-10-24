@@ -1,0 +1,28 @@
+# 환경 변수 파일 (API 키 포함)
+.env
+mcp-client/OPENAI_API.txt
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 로그
+*.log
+
+# 가상환경
+venv/
+env/
+ENV/
+
