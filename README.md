@@ -2,16 +2,16 @@
 
 ## 👀 데모 & 자료 (추가 예정)
 
-- 아키텍처 다이어그램: `docs/architecture.png` (TODO)
-- 서비스 플로우/시퀀스: `docs/sequence.png` (TODO)
-- 앱 스크린샷: `docs/screens/` (TODO)
-- 시연 영상: `https://youtu.be/...` (TODO)
-- 제목수정 및 프로젝트 대표 이미지 추가 (TODO)
-- 프로젝트 구조도 (TODO)
-- (시연 영상 대표 이미지)](유튜브 링크)(TODO)
-- 스크린샷 추가 예정 (TODO)
-- 서버 전체 구조도(TODO)
-- 서버 세부 구조도1, 2(TODO)
+  - 아키텍처 다이어그램: `docs/architecture.png` (TODO)
+  - 서비스 플로우/시퀀스: `docs/sequence.png` (TODO)
+  - 앱 스크린샷: `docs/screens/` (TODO)
+  - 시연 영상: `https://youtu.be/...` (TODO)
+  - 제목수정 및 프로젝트 대표 이미지 추가 (TODO)
+  - 프로젝트 구조도 (TODO)
+  - (시연 영상 대표 이미지)](유튜브 링크)(TODO)
+  - 스크린샷 추가 예정 (TODO)
+  - 서버 전체 구조도(TODO)
+  - 서버 세부 구조도1, 2(TODO)
 
 ---
 
