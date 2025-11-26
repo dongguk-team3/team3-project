@@ -14,11 +14,44 @@ from typing import Optional, Dict, Any, List
 import json
 import sys
 import os
+import subprocess
+import tempfile
+from pathlib import Path
 import argparse
+import aiohttp
 
 # RAG 통합
 from RAG.rag_module import RAGPipeline
 from chat_filter_pipeline import ChatFilterPipeline
+from llm_responder import call_openai_llm
+# Location Server (네이버 지오코딩) 통합 준비
+LOCATION_SERVER_PATHS = [
+    Path("/Users/goyuji/mcp-server/Location_server"),
+    Path(__file__).resolve().parent / "Location_server",
+    Path(__file__).resolve().parent.parent / "Location_server",
+]
+
+for _path in LOCATION_SERVER_PATHS:
+    if _path.exists() and str(_path) not in sys.path:
+        sys.path.append(str(_path))
+
+try:
+    from location_server_config import (
+        NAVER_SEARCH_CLIENT_ID,
+        NAVER_SEARCH_CLIENT_SECRET,
+    )
+    from query_to_naver import (
+        NaverPlaceAPIClient,
+        geocode_location,
+    )
+    NAVER_GEO_AVAILABLE = True
+except Exception as geo_exc:
+    NAVER_GEO_AVAILABLE = False
+    NaverPlaceAPIClient = None  # type: ignore
+    geocode_location = None  # type: ignore
+    NAVER_SEARCH_CLIENT_ID = None  # type: ignore
+    NAVER_SEARCH_CLIENT_SECRET = None  # type: ignore
+    print(f"⚠️  네이버 지오코딩 모듈 로드 실패: {geo_exc}")
 
 
 # FastAPI 관련 (API 모드에서만 사용)
@@ -81,6 +114,74 @@ def load_access_config():
         }
 
 ACCESS_CONFIG = load_access_config()
+
+# nearby_reviews.py 출력 형식과 동일한 기본 샘플 (파일이 없을 때 사용)
+DEFAULT_NEARBY_SAMPLE = {
+    "stores": [
+        "장충동커피",
+        "기브온 카페인바",
+        "포우즈",
+        "스트릿 그릭요거트 카페",
+        "로이터 커피 셸터",
+        "프릳츠 장충점",
+        "커피드니로",
+        "미드템포",
+        "포미스커피",
+        "하우스 커피 앤 디저트",
+    ],
+    "reviews": {
+        "장충동커피": [
+            "생각없이 방문했는데 커피 퀄리티가 너무 좋와서 놀랐네요 따듯한 아메리카노 샷 추가 추천합니다",
+            "굿",
+            "테이크전문 커피숍인데 가성비 좋네요",
+        ],
+        "기브온 카페인바": [
+            "생레몬 구겔호프 상큼하니 맛있어요!\\n카페 오는 길 남산타워가 환상입니다...",
+            "커피는 물론이고 디저트가 아주 훌륭합니다 특히 비스코티는 중독적이네요.. 또 먹으러 가겠습니다",
+            "매장 입장과 동시에 고소한 커피 향이 솔솔~~\\n커피 향도 너무 좋고 진하고 요기 요기 충무로 필동 원탑 커피 맛집입니다👌🏻🩷",
+        ],
+        "포우즈": [
+            "굿",
+            "굿",
+            "루프탑카페. 날씨좋을때 가면 좋음",
+        ],
+        "스트릿 그릭요거트 카페": [
+            "그릭요거트 땡겨서 먹으러왔는데 다른 데에 비해 가성비가 좋아요 사장님도 친절하셔서 좋아요💫",
+            "가게 너무 귀엽고 무화과 요거트 너무 맛있어요",
+            "고즈넉한 분위기의 맛있는 요거트집이에요. 무화과볼 처돌이로써 이곳 무화과 진짜 신선하고요",
+        ],
+        "로이터 커피 셸터": [
+            "필동로를 따라 걷다보면 3층의 넓은 카페입니다!! 뷰도 아늑하고 커피도 맛있어서 풀만족합니다",
+            "카페보단,갤러리나 스튜디오 느낌의 공간",
+            "좋아요",
+        ],
+        "프릳츠 장충점": [
+            "아내와 연애 시절 추억이 있던 프릳츠.",
+            "드디어 원두랑 드립 라인업 맞춰놨네…",
+            "카페의 고즈넉한 분위기와 음악이 커피의 맛과 향에  더 취하게 하는 기억에 남을 곳입니다",
+        ],
+        "커피드니로": [
+            "배우..아니 사장님 진짜로 커피에 진심이시군요...",
+            "태인호 배우님의 팬으로 남양주에서 찾아갔는데 커피 맛집이네요.",
+            "커피는드니로배우는태인호",
+        ],
+        "미드템포": [
+            "분위기가 좋고 음료도 다 맛있어요!!",
+            "학교 근처여서 들려봤는데 너무 좋고 라떼도 너무너무 맛있었어요!!",
+            "분위기도 너무 좋고 동국대 제휴 할인도 됩니다!",
+        ],
+        "포미스커피": [
+            "쿠키가 다양하고 너무 맛있어요~!! 묵직함",
+            "👍🏻👍🏻👍🏻말차쿠키 단골",
+            "충무로역에서 동국대 후문 인근 카페입니다.",
+        ],
+        "하우스 커피 앤 디저트": [
+            "소금빵이랑 기본 휘낭시에 샀는데 휘낭시에에서 마늘빵맛 나요 ㅠㅠ",
+            "한국적이고 어릴때 먹던 수정과 생각나는 맛이예요",
+            "가을만끽하기 좋은 동국대 인근 숲속 위치~~",
+        ],
+    },
+}
 
 # OpenAI API 키 로드
 def load_openai_api_key():
@@ -482,10 +583,24 @@ class LLMEngine:
         초기화
         """
         self.chat_filter_pipeline = ChatFilterPipeline()  # chat.py 통합
-        self.rag_pipeline = RAGPipeline(use_openai_embeddings=False)
+        self.rag_pipeline = RAGPipeline()
         self.location_server = LocationServer()
         self.discount_server = DiscountServer()
         self.recommendation_server = RecommendationServer()
+        self._nearby_reviews_data = None
+        self._nearby_reviews_source = None
+        self._nearby_reviews_script = self._locate_nearby_reviews_script()
+        self._location_cache: Dict[str, Dict[str, Any]] = {}
+        self._naver_client = None
+        if NAVER_GEO_AVAILABLE and NAVER_SEARCH_CLIENT_ID and NAVER_SEARCH_CLIENT_SECRET:
+            try:
+                self._naver_client = NaverPlaceAPIClient(
+                    client_id=NAVER_SEARCH_CLIENT_ID,
+                    client_secret=NAVER_SEARCH_CLIENT_SECRET,
+                )
+            except Exception as exc:
+                print(f"⚠️  네이버 클라이언트 초기화 실패: {exc}")
+                self._naver_client = None
         
         # OpenAI 사용 가능 여부 확인
         self.openai_available = OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_CLIENT
@@ -496,7 +611,8 @@ class LLMEngine:
         user_query: str,
         latitude: float,
         longitude: float,
-        user_id: str,  # 필수로 변경!
+        user_id: str, 
+        user_categories: List[str] = None,
         user_profile: Dict[str, Any] = None,
         mode: List[int] = None,
     ) -> Dict[str, Any]:
@@ -525,6 +641,28 @@ class LLMEngine:
         print(f"   사용자: {user_id}")
         print(f"   질문: {user_query}")
         print(f"   위치: ({latitude}, {longitude})")
+        
+        # 프로필 정보 요약 출력
+        if user_profile:
+            profile_parts = []
+            if user_profile.get("telco"):
+                profile_parts.append(f"통신사: {user_profile.get('telco')}")
+            if user_profile.get("memberships"):
+                profile_parts.append(f"멤버십: {', '.join(user_profile.get('memberships', []))}")
+            if user_profile.get("cards"):
+                profile_parts.append(f"카드: {', '.join(user_profile.get('cards', []))}")
+            if profile_parts:
+                print(f"   프로필(user_profile): {', '.join(profile_parts)}")
+            else:
+                print(f"   프로필(user_profile): (빈 프로필)")
+        else:
+            print(f"   프로필(user_profile): None")
+        
+        if user_categories:
+            print(f"   선호 카테고리(user_categories): {', '.join(user_categories)}")
+        else:
+            print(f"   선호 카테고리(user_categories): None")
+        
         print("="*60)
         
         if mode is None:
@@ -558,11 +696,6 @@ class LLMEngine:
         base_user_profile["userId"] = user_id
         user_profile = base_user_profile
         
-        ################################## MCP 결과를 단계별로 누적하여 RAG 및 LLM 단계에서 재사용
-        mcp_results: Dict[str, Any] = {
-            "user_query": user_query,
-            "user_profile": user_profile,
-        }
         
         # ChatFilterPipeline 실행
         filter_result = self.chat_filter_pipeline.process(
@@ -603,40 +736,71 @@ class LLMEngine:
                 "error": None,
             }
         
-        # 다음 단계로 전달할 변수들
-        place_type = keywords.get("place_type")
-        location = keywords.get("location")
+        ##### output 다음 단계로 전달할 변수들
+        place_type_value = keywords.get("place_type")
+        if isinstance(place_type_value, list):
+            place_type = place_type_value[0] if place_type_value else "음식점"
+        else:
+            place_type = place_type_value or "음식점"
+
+        resolved_latitude, resolved_longitude = await self._determine_coordinates(
+            location_value=keywords.get("location"),
+            fallback_lat=latitude,
+            fallback_lon=longitude,
+        )
+        location = resolved_latitude, resolved_longitude
         attributes = keywords.get("attributes", [])
-        ## extracted_user_profile를 할인 db에서 사용하면 됨.
         user_profile = extracted_user_profile
+        
+        # 변수 초기화 (mode에 따라 정의되지 않을 수 있으므로)
+        stores = []
+        reviews = {}
+        discounts_by_store = {}
+        recommendations = {}
+        mcp_results = {}
         
         
         
         ################################################ 2. LocationServer
         print(f"\n[2/6] 📍 LocationServer 호출 중...")
+        
+        ## input: location, place_type
         if mode[1] and not mode[2]:
-            
-            ## location과 query_keywords는 Prompt Filter 결과에서 추출된 것을 사용.
-            ## 가게 리스트를 만들어서 반환.    
-            
-            ### not mode[2] 이라는 소리는 Discount server까지의 넘어갈 필요가 없다는 것이므로 여기서 종료.
-            return 
+            location_payload = self._prepare_location_stage(
+                latitude=latitude,
+                longitude=longitude,
+                place_type=place_type or "음식점",
+                attributes=attributes,
+            )
+            stores = location_payload.get("stores", [])
+            reviews = location_payload.get("reviews", {})
+            mcp_results = {
+                "step": "location_server",
+                "stores": stores,
+                "reviews": reviews,
+                "meta": location_payload.get("meta"),
+            }
+            return {
+                "success": location_payload.get("success", False),
+                "response": location_payload.get("message", "LocationServer 완료"),
+                "stores": stores,
+                "reviews": reviews,
+                "mcp_results": mcp_results,
+                "error": location_payload.get("error"),
+            }
         else:
             pass
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
         
-        ## output
-        ## stores: 가게 리스트
-        ## reviews: 가게 리뷰 리스트 (추후 RAG용)
-        mcp_results["location_server"] = {
-            "stores": stores,
-            "reviews": reviews
-        }
+        ### output 다음 단계로 전달할 변수들
+        # stores: 가게 이름 리스트 (LocationServer에서 할당됨)
+        # reviews: 가게 리뷰 리스트 (LocationServer에서 할당됨)
+                                    
         
-       
-        
+        ################################################
         
         # 3. DiscountServer (LocationServer 결과 + 사용자 프로필 사용)
+        ## input : stores, user_profile
         print(f"\n[3/6] 💰 DiscountServer 호출 중...")
         if mode[2] and not mode[3]:
             
@@ -651,8 +815,8 @@ class LLMEngine:
             pass
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
             
-        ## output
-        ## discounts_by_store: 가게별 할인 정보
+        ### output 다음 단계로 전달할 변수들
+        ### 미정
         
         
         
@@ -672,11 +836,86 @@ class LLMEngine:
             pass
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
         
-        ### output
+        ### output 다음 단계로 전달할 변수들
         ### recommendations: 추천 결과 리스트 (할인율 순, 거리순)
-        mcp_results["recommendation_server"] = {
-            "recommendations": recommendation_result
-        }
+        # 아래는 예시 데이터 구조 
+        #   recommendations = {
+        #     "by_discount": {
+            #     "store_list": [
+            #         {
+            #             "store_id": "s1",
+            #             "name": "맘스터치",
+            #             "distance_meters": 200,
+            #             "all_benefits": [
+            #                 {
+            #                     "discountName": "신메뉴 출시 20% 할인",
+            #                     "providerType": "STORE",
+            #                     "providerName": "맘스터치",
+            #                     "shape": {"kind": "PERCENT", "amount": 20.0, "maxAmount": None},
+            #                 },
+            #                 {
+            #                     "discountName": "멤버십 적립 5000원",
+            #                     "providerType": "MEMBERSHIP",
+            #                     "providerName": "MPOINT",
+            #                     "shape": {"kind": "AMOUNT", "amount": 5000.0, "maxAmount": None},
+            #                 },
+            #             ],
+            #             "rank": 1,
+            #         },
+            #         {
+            #             "store_id": "s2",
+            #             "name": "은화수식당",
+            #             "distance_meters": 350,
+            #             "all_benefits": [
+            #                 {
+            #                     "discountName": "CJ ONE 10% 할인",
+            #                     "providerType": "MEMBERSHIP",
+            #                     "providerName": "CJ ONE",
+            #                     "shape": {"kind": "PERCENT", "amount": 10.0, "maxAmount": None},
+            #                 },
+            #                 {
+            #                     "discountName": "리뷰작성시 음료증정",
+            #                     "providerType": "STORE",
+            #                     "providerName": "은화수식당",
+            #                     "shape": {"kind": "AMOUNT", "amount": 0.0, "maxAmount": None},
+            #                 },
+            #             ],
+            #             "rank": 2,
+            #         },
+            #         {
+            #             "store_id": "s3",
+            #             "name": "중국성",
+            #             "distance_meters": 180,
+            #             "all_benefits": [
+            #                 {
+            #                     "discountName": "T멤버십 1000원당 150원 할인",
+            #                     "providerType": "TELCO",
+            #                     "providerName": "SKT",
+            #                     "shape": {
+            #                         "kind": "PER_UNIT",
+            #                         "amount": 0.0,
+            #                         "maxAmount": 3000.0,
+            #                         "unitRule": {"unitAmount": 1000.0, "perUnitValue": 150.0, "maxDiscountAmount": 3000.0},
+            #                     },
+            #                 }
+            #             ],
+            #             "rank": 3,
+            #         },
+            #     ]
+            # },
+            # "by_distance": {
+            #     "store_list": [
+            #         {"store_id": "s3", "name": "중국성", "distance_meters": 180, "rank": 1},
+            #         {"store_id": "s1", "name": "맘스터치", "distance_meters": 200, "rank": 2},
+            #         {"store_id": "s2", "name": "은화수식당", "distance_meters": 350, "rank": 3},
+            #     ]
+            # },
+        # }
+        
+        
+        ## recomendation server의 output
+        recommendations = recommendations
+        
         
         
         ####### 아래는 RAG용 이니까 신경 X ##########
@@ -685,157 +924,46 @@ class LLMEngine:
             print(f"\n[6/6] 🔍 RAG 처리 중...")
             rag_result = self.rag_pipeline.process(
                 user_query=user_query,
-                mcp_results=mcp_results,
+                recommendations=recommendations,
                 top_k=3,
                 session_id=user_id,
-                user_profile=user_profile
+                user_profile=user_profile,
+                reviews=reviews
             )
-            print(f"✅ RAG 처리 완료 (스텁 모드)")
-            
+
+            discount_summary = rag_result.get("discount_summary")
+
             # [4단계] OpenAI LLM 호출 (실제 구현)
             print(f"\n🤖 OpenAI LLM 호출 중...")
             if self.openai_available:
-                response = await self._call_openai_llm(
+                response = await call_openai_llm(
+                    openai_client=self.openai_client,
                     user_query=user_query,
                     llm_context=rag_result["llm_context"],
                     filter_result=filter_result,
-                    user_profile=user_profile
                 )
                 print(f"✅ LLM 응답 생성 완료")
             else:
                 response = rag_result.get("fallback_answer", "LLM 응답을 생성할 수 없습니다.")
-            
+
+            if discount_summary:
+                response = f"{response}\n\n[할인 요약]\n{discount_summary}"
+
             print("\n" + "="*60)
             print(f"✅ 쿼리 처리 완료")
             print("="*60 + "\n")
-            
+
             return {
                 "success": True,
                 "query": user_query,
                 "response": response,
                 "mcp_results": mcp_results,
-                "rag_result": rag_result
+                "rag_result": rag_result,
+                "discount_summary": discount_summary,
             }
         
     
-    async def _call_openai_llm(
-        self,
-        user_query: str,
-        llm_context: str,
-        filter_result: Optional[Dict[str, Any]],
-        user_profile: Dict[str, Any]
-    ) -> str:
-        """
-        OpenAI LLM 호출 (OpenAI 공식 문서 기준)
-        
-        Args:
-            user_query: 사용자 질문
-            llm_context: RAG로 생성된 컨텍스트
-            filter_result: Prompt Filter 결과
-        
-        Returns:
-            LLM 생성 응답
-        """
-        try:
-            keywords = filter_result.get("keywords") if filter_result else None
-            keyword_text = ""
-            if keywords:
-                place = keywords.get("place_type")
-                attributes = ", ".join(keywords.get("attributes", []))
-                location = keywords.get("location")
-                keyword_text = f"키워드: 장소={place}, 속성={attributes}, 지역={location}"
-            
-            profile_desc = []
-            telco = user_profile.get("telco")
-            cards = ", ".join(user_profile.get("cards", []))
-            memberships = ", ".join(user_profile.get("memberships", []))
-            if telco:
-                profile_desc.append(f"통신사 {telco}")
-            if cards:
-                profile_desc.append(f"카드 {cards}")
-            if memberships:
-                profile_desc.append(f"멤버십 {memberships}")
-            profile_text = ", ".join(profile_desc)
-            
-            system_message = (
-                "당신은 위치 기반 맛집/카페 추천 비서입니다. "
-                "사용자가 실제로 받을 수 있는 할인 혜택과 리뷰 분위기를 우선적으로 안내하세요. "
-                "제공된 컨텍스트 밖의 정보는 추측하지 마세요."
-            )
-            if profile_text:
-                system_message += f" 사용자 프로필: {profile_text}."
-            if keyword_text:
-                system_message += f" {keyword_text}."
-            
-            messages = [
-                {"role": "system", "content": system_message},
-                {
-                    "role": "system",
-                    "content": f"""[검색된 정보]
-{llm_context}
-
-[지침]
-- 위 검색된 정보를 우선적으로 활용하여 답변하세요.
-- 정보에 없는 내용은 추측하지 말고 "정보가 없습니다"라고 답변하세요.
-- 할인 정보가 있다면 명확하게 강조하세요.
-- 거리 정보가 있다면 함께 안내하세요.
-- 친근하고 도움이 되는 톤으로 작성하세요.""",
-                },
-            ]
-            if filter_result:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": f"추가 참조: {json.dumps(filter_result, ensure_ascii=False)}",
-                    }
-                )
-            
-            # 3. User Message: 사용자 질문
-            messages.append({
-                "role": "user",
-                "content": user_query
-            })
-            
-            # OpenAI API 호출 (공식 문서 기준)
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo-1106",  # 최신 모델 (JSON mode 지원)
-                messages=messages,
-                temperature=0.7,  # 창의성 (0.0 ~ 2.0)
-                max_tokens=800,   # 최대 토큰 수
-                top_p=1.0,        # Nucleus sampling
-                frequency_penalty=0.0,  # 반복 감소
-                presence_penalty=0.0,   # 주제 다양성
-                # response_format={"type": "text"}  # 또는 "json_object"
-            )
-            
-            # 응답 추출
-            assistant_message = response.choices[0].message.content
-            
-            # 토큰 사용량 로깅
-            usage = response.usage
-            print(f"💰 토큰 사용량: 입력 {usage.prompt_tokens}, 출력 {usage.completion_tokens}, 총 {usage.total_tokens}")
-            
-            return assistant_message
-            
-        except Exception as e:
-            # 상세한 에러 처리
-            error_type = type(e).__name__
-            error_message = str(e)
-            
-            print(f"❌ OpenAI API 오류 [{error_type}]: {error_message}")
-            
-            # 사용자 친화적 에러 메시지
-            if "rate_limit" in error_message.lower():
-                return "⚠️ 일시적으로 요청이 많아 처리할 수 없습니다. 잠시 후 다시 시도해주세요."
-            elif "invalid_api_key" in error_message.lower():
-                return "⚠️ API 키가 유효하지 않습니다. 관리자에게 문의해주세요."
-            elif "insufficient_quota" in error_message.lower():
-                return "⚠️ API 사용량이 초과되었습니다. 관리자에게 문의해주세요."
-            else:
-                return f"⚠️ 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.\n(오류: {error_type})"
     
-        
-        return response
 
 
 # ============================================================
@@ -852,6 +980,7 @@ if FASTAPI_AVAILABLE:
         user_id: str  # 필수로 변경!
         context: Optional[Dict[str, Any]] = None
         user_profile: Optional[Dict[str, Any]] = None
+        user_categories: Optional[List[str]] = None
         
         class Config:
             json_schema_extra = {
@@ -864,7 +993,13 @@ if FASTAPI_AVAILABLE:
                     "telco": "SKT",
                     "memberships": ["VIP"],
                     "cards": ["T-Lounge"]
-                }
+                },
+                "user_categories": [
+                    "가성비",
+                    "모임",
+                    "혼밥",
+                    "분위기"
+                ]
             }
         }
     
@@ -1021,13 +1156,19 @@ if FASTAPI_AVAILABLE:
             # mode = [1,1,1,0,0]  # discount server 까지만
             # mode = [1,1,1,1,0]  # recommendation server 까지만
             # mode = [1,1,1,1,1]  # rag 까지 모두
+            
+            # 기본 위치 설정 (서울 시청)
+            latitude = request.latitude if request.latitude is not None else 37.5665
+            longitude = request.longitude if request.longitude is not None else 126.9780
+            
             result = await llm_engine.process_query(
                 user_query=request.query,
-                latitude=request.latitude,
-                longitude=request.longitude,
+                latitude=latitude,
+                longitude=longitude,
                 user_id=request.user_id,
+                user_categories=request.user_categories,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,0,0,0,0]  # prompt filter 까지만 테스트
+                mode=[1,1,0,0,0]  # location server까지 실행
             )
             
             if not result["success"]:
@@ -1068,8 +1209,8 @@ def main():
     )
     parser.add_argument(
         "--host",
-        default="145.0.0.0",
-        help="API 서버 호스트 (기본: 145.0.0.0)"
+        default="127.0.0.1",
+        help="API 서버 호스트 (기본: 127.0.0.1)"
     )
     parser.add_argument(
         "--port",
