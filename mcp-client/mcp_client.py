@@ -24,6 +24,9 @@ import aiohttp
 from RAG.rag_module import RAGPipeline
 from chat_filter_pipeline import ChatFilterPipeline
 from llm_responder import call_openai_llm
+# Location Module 통합
+from location_module import LocationModule
+
 # Location Server (네이버 지오코딩) 통합 준비
 LOCATION_SERVER_PATHS = [
     Path("/Users/goyuji/mcp-server/Location_server"),
@@ -82,38 +85,7 @@ except ImportError:
 # API 키 (팀원들과 공유할 비밀 키)
 API_KEY = os.getenv("API_KEY", "OSS_TEAM_SECRET_KEY_2025")
 
-# 접근 제어 설정 로드
-def load_access_config():
-    """config.json에서 접근 제어 설정 로드"""
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            return config
-    except FileNotFoundError:
-        # 기본 설정
-        return {
-            "allowed_ips": ["127.0.0.1", "localhost", "::1"],
-            "allowed_ports": [8000, 8001, 8002, 8080, 3000, 5000],
-            "developer_mode": True,
-            "enable_ip_whitelist": False,
-            "enable_port_whitelist": False,
-            "default_host": "0.0.0.0",
-            "default_port": 8000
-        }
-    except Exception as e:
-        print(f"⚠️  설정 파일 로드 실패: {e}")
-        return {
-            "allowed_ips": ["127.0.0.1", "localhost", "::1"],
-            "allowed_ports": [8000, 8001, 8002, 8080, 3000, 5000],
-            "developer_mode": True,
-            "enable_ip_whitelist": False,
-            "enable_port_whitelist": False,
-            "default_host": "0.0.0.0",
-            "default_port": 8000
-        }
 
-ACCESS_CONFIG = load_access_config()
 
 # nearby_reviews.py 출력 형식과 동일한 기본 샘플 (파일이 없을 때 사용)
 DEFAULT_NEARBY_SAMPLE = {
@@ -221,233 +193,216 @@ class LocationServer:
     
     def __init__(self):
         """초기화"""
-        self.server_path = "실제 파일 경로로 바꿀 것."
-        # 예시: self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Location_server/location_server.py" ## 실제 파일 경로로 바꿀 것.
+        self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Location_server/location_server.py"
     
-    # async def search_stores(self, latitude: float, longitude: float, query: str) -> Dict[str, Any]:
-    #     """
-    #     상점 검색 (MCP Server 호출)
+    async def search_stores(
+        self, 
+        latitude: float, 
+        longitude: float, 
+        place_type: str,
+        radius: int = 1000,
+        max_stores: int = 10,
+        reviews_per_store: int = 3
+    ) -> Dict[str, Any]:
+        """
+        상점 검색 (MCP Server 호출)
         
-    #     Args:
-    #         latitude: 위도
-    #         longitude: 경도
-    #         query: 검색 쿼리 (예: "음식점", "카페")
+        Args:
+            latitude: 위도
+            longitude: 경도
+            place_type: 장소 유형 (예: "카페", "중식집", "일식집", "맛집", "음식점")
+            radius: 검색 반경(m), 기본값 1000
+            max_stores: 최대 검색할 매장 수, 기본값 10
+            reviews_per_store: 각 매장당 수집할 리뷰 수, 기본값 3
         
-    #     Returns:
-    #         검색 결과 딕셔너리
-    #     """
-    #     server_params = StdioServerParameters(
-    #         command="python",
-    #         args=[self.server_path],
-    #         env={"PYTHONPATH": "/opt/conda/envs/team/lib/python3.11/site-packages"}
-    #     )
+        Returns:
+            검색 결과 딕셔너리 (stores, reviews 포함)
+        """
+        # 절대 경로로 변환
+        import os
+        server_path_abs = os.path.abspath(self.server_path)
+        server_dir = os.path.dirname(server_path_abs)
         
-    #     try:
-    #         async with stdio_client(server_params) as (read, write):
-    #             async with ClientSession(read, write) as session:
-    #                 await session.initialize()
-                    
-    #                 # search_nearby_stores 도구 호출
-    #                 result = await session.call_tool(
-    #                     "search_nearby_stores",
-    #                     {
-    #                         "latitude": latitude,
-    #                         "longitude": longitude,
-    #                         "category": query
-    #                     }
-    #                 )
-                    
-    #                 # 결과 파싱
-    #                 if result.content and len(result.content) > 0:
-    #                     response_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
-    #                     parsed_result = json.loads(response_text)
-    #                     print(f"   MCP 서버 응답: {parsed_result.get('message', 'N/A')}")
-    #                     print(f"   가게 수: {len(parsed_result.get('stores', []))}개")
-    #                     return parsed_result
-                    
-    #                 print("   ⚠️ MCP 서버에서 빈 응답 받음")
-    #                 return {"stores": [], "error": "결과 없음"}
-                    
-    #     except Exception as e:
-    #         print(f"   ❌ MCP 통신 오류: {e}")
-    #         return {
-    #             "stores": [],
-    #             "error": f"MCP 서버 통신 오류: {str(e)}",
-    #             "details": str(e)
-    #         }
-    
-    # ## 디버깅용 함수
-    # async def test_connection(self, server_params: StdioServerParameters):
-    #     """MCP 서버 연결 테스트"""
-    #     print("=" * 60)
-    #     print("🚀 MCP Client MVP 테스트 시작")
-    #     print("=" * 60)
+        server_params = StdioServerParameters(
+            command="python",
+            args=[server_path_abs],
+            env=None,
+            cwd=server_dir  # 작업 디렉토리 설정
+        )
         
-    #     try:
-    #         print(f"🔌 MCP 서버에 연결 중...")
-            
-    #         # stdio_client로 서버와 연결
-    #         async with stdio_client(server_params) as (read, write):
-    #             async with ClientSession(read, write) as session:
-    #                 # 세션 초기화
-    #                 init_result = await session.initialize()
-    #                 print(f"✅ MCP 서버 연결 성공!")
+        try:
+            from mcp.client.stdio import stdio_client
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
                     
-    #                 # 서버 정보 출력
-    #                 print(f"\n📋 서버 정보:")
-    #                 print(f"  - 서버 이름: {init_result.serverInfo.name}")
-    #                 print(f"  - 프로토콜 버전: {init_result.protocolVersion}")
+                    # search_fnb_with_reviews 도구 호출
+                    result = await session.call_tool(
+                        "search_fnb_with_reviews",
+                        {
+                            "latitude": latitude,
+                            "longitude": longitude,
+                            "category": place_type,
+                            "radius": radius,
+                            "max_stores": max_stores,
+                            "reviews_per_store": reviews_per_store
+                        }
+                    )
                     
-    #                 # 사용 가능한 도구 목록 조회
-    #                 print(f"\n🔧 사용 가능한 도구 목록:")
-    #                 tools_list = await session.list_tools()
-                    
-    #                 if not tools_list.tools:
-    #                     print("  도구가 없습니다.")
-    #                     return
-                    
-    #                 for i, tool in enumerate(tools_list.tools, 1):
-    #                     print(f"  {i}. {tool.name}")
-    #                     if hasattr(tool, 'description') and tool.description:
-    #                         print(f"     설명: {tool.description}")
-    #                     if hasattr(tool, 'inputSchema'):
-    #                         print(f"     파라미터: {tool.inputSchema}")
-                    
-    #                 # 첫 번째 도구 테스트 실행
-    #                 if tools_list.tools:
-    #                     first_tool = tools_list.tools[0]
-    #                     print(f"\n🧪 테스트 도구 실행: {first_tool.name}")
+                    # 결과 파싱
+                    if result.content and len(result.content) > 0:
+                        response_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
                         
-    #                     # 도구에 따라 적절한 파라미터 설정
-    #                     test_args = self._get_test_arguments(first_tool.name)
+                        # 빈 문자열 체크
+                        if not response_text or not response_text.strip():
+                            print("   ⚠️ LocationServer에서 빈 응답 받음")
+                            return {"stores": [], "reviews": {}, "error": "빈 응답"}
                         
-    #                     if test_args is not None:
-    #                         print(f"   파라미터: {json.dumps(test_args, ensure_ascii=False, indent=2)}")
-                            
-    #                         try:
-    #                             result = await session.call_tool(first_tool.name, test_args)
-    #                             print(f"✅ 도구 실행 성공!")
-    #                             print(f"   결과:")
-    #                             for content in result.content:
-    #                                 if hasattr(content, 'text'):
-    #                                     print(f"   {content.text}")
-    #                                 else:
-    #                                     print(f"   {content}")
-    #                         except Exception as e:
-    #                             print(f"⚠️  도구 실행 중 오류: {str(e)}")
-    #                     else:
-    #                         print(f"   (이 도구는 필수 파라미터가 필요하여 스킵합니다)")
+                        try:
+                            parsed_result = json.loads(response_text)
+                            print(f"   ✅ LocationServer 응답: {parsed_result.get('message', 'N/A')}")
+                            print(f"   📍 가게 수: {parsed_result.get('total_stores', 0)}개")
+                            print(f"   💬 리뷰 수: {parsed_result.get('total_reviews', 0)}개")
+                            return parsed_result
+                        except json.JSONDecodeError as e:
+                            print(f"   ⚠️ JSON 파싱 오류: {e}")
+                            print(f"   응답 내용 (처음 200자): {response_text[:200]}")
+                            return {"stores": [], "reviews": {}, "error": f"JSON 파싱 오류: {str(e)}"}
                     
-    #                 print("\n" + "=" * 60)
-    #                 print("✅ MCP Client MVP 테스트 완료!")
-    #                 print("=" * 60)
-            
-    #     except Exception as e:
-    #         print(f"\n❌ 오류 발생: {str(e)}")
-    #         import traceback
-    #         traceback.print_exc()
+                    print("   ⚠️ LocationServer에서 빈 응답 받음")
+                    return {"stores": [], "reviews": {}, "error": "결과 없음"}
+                    
+        except Exception as e:
+            print(f"   ❌ LocationServer 통신 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "stores": [],
+                "reviews": {},
+                "error": f"LocationServer 통신 오류: {str(e)}",
+                "details": str(e)
+            }
     
-    # ## 디버깅용 함수
-    # def _get_test_arguments(self, tool_name: str) -> Optional[dict]:
-    #     """도구별 테스트 파라미터 반환"""
-    #     # 자체 위치 서버 도구들
-    #     if tool_name == "search_nearby_stores":
-    #         return {
-    #             "latitude": 37.5665,   # 서울 시청 위도
-    #             "longitude": 126.9780, # 서울 시청 경도
-    #             "category": "음식점"
-    #         }
-        
-    #     if tool_name == "get_store_info":
-    #         return {
-    #             "store_id": "store_001"
-    #         }
-        
-    #     # 기본적으로 빈 딕셔너리 반환
-    #     return {}
 
 
 class DiscountServer:
-    """할인 정보 수집 서버 (추후 구현 예정)"""
+    """할인 정보 수집 서버 (Discount_MAP_server MCP)"""
     
     def __init__(self):
         """초기화"""
-        # TODO: 실제 할인 정보 MCP 서버 경로 설정
-        self.server_path = "실제 파일 경로로 바꿀 것."
-        # 예시: self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Discount_MAP_server/discount_server.py"
-        self.is_implemented = False
+        # 네 Discount_MAP_server MCP 진입점
+        self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Discount_MAP_server/discount_server.py"
+        self.is_implemented = True
     
-    # async def get_discounts(
-    #     self, 
-    #     stores: List[Dict], 
-    #     user_profile: Dict[str, Any]
-    # ) -> Dict[str, Any]:
-    #     """
-    #     여러 가게의 할인 정보 일괄 조회 (사용자 프로필 기반)
+    async def get_discounts(
+        self,
+        stores: List[str],
+        user_profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Discount_MAP MCP 서버 호출해서 매장별 할인 정보 가져오기.
         
-    #     Args:
-    #         stores: 가게 목록 (LocationServer 결과)
-    #         user_profile: 사용자 프로필 (PatternAnalysisServer 결과)
-    #             - telecom: 통신사
-    #             - cards: 보유 카드 목록
-    #             - memberships: 멤버십 목록
+        Args:
+            stores: 가게 이름 리스트 (Location 단계 결과)
+            user_profile: 사용자 프로필 (통신사, 멤버십, 카드 등)
         
-    #     Returns:
-    #         가게별 할인 정보 딕셔너리
-    #     """
-    #     if not self.is_implemented:
-    #         # TODO: 실제 MCP 서버 구현 후 제거
-    #         # Mock 데이터: 각 가게별 할인 정보 생성
-    #         discounts_by_store = {}
-            
-    #         for store in stores[:5]:  # 상위 5개만 Mock
-    #             store_id = store.get("id", "unknown")
-    #             store_name = store.get("name", "알 수 없음")
-                
-    #             # Mock 할인 생성
-    #             mock_discounts = []
-                
-    #             # 통신사 할인 (Mock)
-    #             telecom = user_profile.get("telecom", "")
-    #             if telecom in ["SKT", "KT", "LG U+"]:
-    #                 mock_discounts.append({
-    #                     "type": "telecom",
-    #                     "provider": telecom,
-    #                     "rate": 20,
-    #                     "description": f"{telecom} 통신사 제휴 20% 할인"
-    #                 })
-                
-    #             # 카드 할인 (Mock)
-    #             cards = user_profile.get("cards", {})
-    #             primary_card = cards.get("primary", "")
-    #             if primary_card:
-    #                 mock_discounts.append({
-    #                     "type": "card",
-    #                     "provider": primary_card,
-    #                     "rate": 10,
-    #                     "description": f"{primary_card} 10% 즉시할인"
-    #                 })
-                
-    #             # 최대 할인율 계산
-    #             max_discount = max([d["rate"] for d in mock_discounts], default=0)
-                
-    #             discounts_by_store[store_id] = {
-    #                 "store_id": store_id,
-    #                 "store_name": store_name,
-    #                 "discounts": mock_discounts,
-    #                 "max_discount": max_discount,
-    #                 "best_payment": mock_discounts[0] if mock_discounts else None
-    #             }
-            
-    #         return {
-    #             "message": "⚠️ 할인 정보 서버는 아직 구현되지 않았습니다 (Mock 데이터).",
-    #             "discounts_by_store": discounts_by_store,
-    #             "total_stores_analyzed": len(discounts_by_store)
-    #         }
+        Returns (예시):
+            {
+              "success": bool,
+              "message": str,
+              "discounts_by_store": { store_name: [ {discount...}, ... ] },
+              ... (discount_server가 더 넣어준 필드들)
+            }
+        """
+        if not self.is_implemented:
+            return {
+                "success": False,
+                "message": "DiscountServer가 아직 구현되지 않았습니다.",
+                "discounts_by_store": {},
+            }
         
-    #     # TODO: 실제 MCP 서버 호출 로직 구현
-    #     pass
-
+        if not stores:
+            return {
+                "success": True,
+                "message": "입력 매장이 없어 할인 조회를 건너뜁니다.",
+                "discounts_by_store": {},
+            }
+        
+        # 절대 경로로 변환
+        server_path_abs = os.path.abspath(self.server_path)
+        server_dir = os.path.dirname(server_path_abs)
+        
+        server_params = StdioServerParameters(
+            command="python",          # 서버 실행 명령
+            args=[server_path_abs],    # discount_server.py
+            env=None,
+            cwd=server_dir,            # 작업 디렉터리
+        )
+        
+        try:
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    
+                    #  서버 쪽 함수 시그니처가 (userProfile, stores)이므로
+                    payload = {
+                        "userProfile": user_profile,
+                        "stores": stores,
+                    }
+                    
+                    # 서버의 tool 이름: "get_discounts_for_stores"
+                    result = await session.call_tool(
+                        "get_discounts_for_stores",
+                        payload,
+                    )
+                    
+                    if not result.content:
+                        return {
+                            "success": False,
+                            "message": "DiscountServer에서 빈 응답을 받았습니다.",
+                            "discounts_by_store": {},
+                        }
+                    
+                    response_text = getattr(result.content[0], "text", None) or str(result.content[0])
+                    
+                    if not response_text.strip():
+                        return {
+                            "success": False,
+                            "message": "DiscountServer 응답이 비어 있습니다.",
+                            "discounts_by_store": {},
+                        }
+                    
+                    try:
+                        parsed = json.loads(response_text)
+                    except json.JSONDecodeError as e:
+                        print(f"[DiscountServer] JSON 파싱 오류: {e}")
+                        print(f"  응답 앞 200자: {response_text[:200]}")
+                        return {
+                            "success": False,
+                            "message": f"DiscountServer JSON 파싱 오류: {e}",
+                            "discounts_by_store": {},
+                            "raw_response": response_text,
+                        }
+                    
+                    # DiscountService가 어떤 키를 넣어주든 받아서 넘겨주기
+                    discounts_by_store = parsed.get("discounts_by_store", {})
+                    
+                    return {
+                        "success": parsed.get("success", True),
+                        "message": parsed.get("message", "할인 정보 조회 성공"),
+                        "discounts_by_store": discounts_by_store,
+                        "raw_response": parsed,
+                    }
+        
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": f"DiscountServer 통신 오류: {e}",
+                "discounts_by_store": {},
+                "error": str(e),
+            }
 
 class RecommendationServer:
     """추천 알고리즘 서버 (추후 구현 예정)"""
@@ -459,114 +414,6 @@ class RecommendationServer:
         # 예시: self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Recommendation_server/recommendation_server.py"
         self.is_implemented = False
     
-    # async def get_recommendations(
-    #     self, 
-    #     user_id: str,
-    #     user_profile: Dict[str, Any],
-    #     user_preferences: Dict[str, Any],
-    #     stores: List[Dict],
-    #     discounts: Dict[str, Any],
-    #     context: Dict = None
-    # ) -> Dict[str, Any]:
-    #     """
-    #     사용자 맞춤 추천 생성 (모든 MCP Server 결과 종합)
-        
-    #     Args:
-    #         user_id: 사용자 ID
-    #         user_profile: 사용자 프로필 (통신사, 카드 등)
-    #         user_preferences: 사용자 선호도 (선호 카테고리, 평균 예산 등)
-    #         stores: 상점 목록 (LocationServer)
-    #         discounts: 할인 정보 (DiscountServer)
-    #         context: 컨텍스트 정보 (시간, 날씨 등)
-        
-    #     Returns:
-    #         추천 결과 딕셔너리 (순위별 점수 포함)
-    #     """
-    #     if not self.is_implemented:
-    #         # TODO: 실제 MCP 서버 구현 후 제거
-    #         # Mock: 하이브리드 추천 알고리즘 시뮬레이션
-            
-    #         discounts_data = discounts.get("discounts_by_store", {})
-    #         preferred_categories = user_preferences.get("preferred_categories", [])
-    #         avg_budget = user_preferences.get("avg_budget", 15000)
-            
-    #         scored_stores = []
-            
-    #         for store in stores:
-    #             store_id = store.get("id", "")
-    #             store_name = store.get("name", "알 수 없음")
-    #             category = store.get("category_name", "")
-    #             distance = store.get("distance", 999999)
-                
-    #             # 하이브리드 점수 계산 (Mock)
-    #             score = 0.0
-    #             breakdown = {}
-                
-    #             # [1] Content-Based Filtering (40%)
-    #             content_score = 0.0
-    #             # A. 카테고리 매칭 (25점)
-    #             if any(cat in category for cat in preferred_categories):
-    #                 content_score += 0.25
-    #             # B. 거리 점수 (15점) - 가까울수록 높음
-    #             distance_score = max(0, 1 - (distance / 1000)) * 0.15
-    #             content_score += distance_score
-                
-    #             breakdown["content_based"] = content_score * 0.4
-    #             score += content_score * 0.4
-                
-    #             # [2] Collaborative Filtering (30%) - Mock: 랜덤
-    #             collab_score = 0.15  # Mock: 평균 점수
-    #             breakdown["collaborative"] = collab_score * 0.3
-    #             score += collab_score * 0.3
-                
-    #             # [3] Discount Optimization (30%)
-    #             discount_info = discounts_data.get(store_id, {})
-    #             max_discount = discount_info.get("max_discount", 0)
-    #             discount_score = min(max_discount / 30, 1.0) * 0.3
-    #             breakdown["discount"] = discount_score
-    #             score += discount_score
-                
-    #             # 추천 이유 생성
-    #             reasons = []
-    #             if any(cat in category for cat in preferred_categories):
-    #                 reasons.append(f"선호하시는 {category} 카테고리")
-    #             if max_discount > 0:
-    #                 best_payment = discount_info.get("best_payment", {})
-    #                 provider = best_payment.get("provider", "") if best_payment else ""
-    #                 reasons.append(f"{provider} {max_discount}% 할인")
-    #             if distance < 300:
-    #                 reasons.append(f"가까운 거리 ({distance}m)")
-                
-    #             scored_stores.append({
-    #                 "rank": 0,  # 나중에 정렬 후 설정
-    #                 "store": store,
-    #                 "score": round(score, 2),
-    #                 "score_breakdown": breakdown,
-    #                 "discount_info": discount_info,
-    #                 "recommendation_reason": ", ".join(reasons) if reasons else "주변 인기 매장"
-    #             })
-            
-    #         # 점수순 정렬
-    #         scored_stores.sort(key=lambda x: x["score"], reverse=True)
-            
-    #         # 순위 부여
-    #         for idx, item in enumerate(scored_stores, 1):
-    #             item["rank"] = idx
-            
-    #         return {
-    #             "message": "⚠️ 추천 알고리즘 서버는 아직 구현되지 않았습니다 (Mock 알고리즘).",
-    #             "recommendations": scored_stores[:10],
-    #             "total_candidates": len(stores),
-    #             "algorithm": "HybridRecommender (Mock)",
-    #             "weights": {
-    #                 "content_based": 0.4,
-    #                 "collaborative": 0.3,
-    #                 "discount": 0.3
-    #             }
-    #         }
-        
-    #     # TODO: 실제 MCP 서버 호출 로직 구현
-    #     pass
 
 
 
@@ -587,24 +434,12 @@ class LLMEngine:
         self.location_server = LocationServer()
         self.discount_server = DiscountServer()
         self.recommendation_server = RecommendationServer()
-        self._nearby_reviews_data = None
-        self._nearby_reviews_source = None
-        self._nearby_reviews_script = self._locate_nearby_reviews_script()
-        self._location_cache: Dict[str, Dict[str, Any]] = {}
-        self._naver_client = None
-        if NAVER_GEO_AVAILABLE and NAVER_SEARCH_CLIENT_ID and NAVER_SEARCH_CLIENT_SECRET:
-            try:
-                self._naver_client = NaverPlaceAPIClient(
-                    client_id=NAVER_SEARCH_CLIENT_ID,
-                    client_secret=NAVER_SEARCH_CLIENT_SECRET,
-                )
-            except Exception as exc:
-                print(f"⚠️  네이버 클라이언트 초기화 실패: {exc}")
-                self._naver_client = None
+        self.location_module = LocationModule()
         
         # OpenAI 사용 가능 여부 확인
         self.openai_available = OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_CLIENT
         self.openai_client = OPENAI_CLIENT
+
     
     async def process_query(
         self,
@@ -612,7 +447,6 @@ class LLMEngine:
         latitude: float,
         longitude: float,
         user_id: str, 
-        user_categories: List[str] = None,
         user_profile: Dict[str, Any] = None,
         mode: List[int] = None,
     ) -> Dict[str, Any]:
@@ -651,17 +485,14 @@ class LLMEngine:
                 profile_parts.append(f"멤버십: {', '.join(user_profile.get('memberships', []))}")
             if user_profile.get("cards"):
                 profile_parts.append(f"카드: {', '.join(user_profile.get('cards', []))}")
+            if user_profile.get("categories"):
+                profile_parts.append(f"선호카테고리: {', '.join(user_profile.get('categories', []))}")
             if profile_parts:
                 print(f"   프로필(user_profile): {', '.join(profile_parts)}")
             else:
                 print(f"   프로필(user_profile): (빈 프로필)")
         else:
             print(f"   프로필(user_profile): None")
-        
-        if user_categories:
-            print(f"   선호 카테고리(user_categories): {', '.join(user_categories)}")
-        else:
-            print(f"   선호 카테고리(user_categories): None")
         
         print("="*60)
         
@@ -764,22 +595,23 @@ class LLMEngine:
         ################################################ 2. LocationServer
         print(f"\n[2/6] 📍 LocationServer 호출 중...")
         
+        
         ## input: location, place_type
-        if mode[1] and not mode[2]:
-            location_payload = self._prepare_location_stage(
+        location_payload = self.location_module.prepare_location_stage(
                 latitude=latitude,
                 longitude=longitude,
                 place_type=place_type or "음식점",
                 attributes=attributes,
             )
-            stores = location_payload.get("stores", [])
-            reviews = location_payload.get("reviews", {})
-            mcp_results = {
-                "step": "location_server",
-                "stores": stores,
-                "reviews": reviews,
-                "meta": location_payload.get("meta"),
-            }
+        stores = location_payload.get("stores", [])
+        reviews = location_payload.get("reviews", {})
+        mcp_results = {
+            "step": "location_server",
+            "stores": stores,
+            "reviews": reviews,
+            "meta": location_payload.get("meta"),
+        }
+        if mode[1] and not mode[2]:
             return {
                 "success": location_payload.get("success", False),
                 "response": location_payload.get("message", "LocationServer 완료"),
@@ -788,37 +620,52 @@ class LLMEngine:
                 "mcp_results": mcp_results,
                 "error": location_payload.get("error"),
             }
-        else:
-            pass
+            
+         
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
         
         ### output 다음 단계로 전달할 변수들
         # stores: 가게 이름 리스트 (LocationServer에서 할당됨)
         # reviews: 가게 리뷰 리스트 (LocationServer에서 할당됨)
-                                    
+                
         
         ################################################
         
         # 3. DiscountServer (LocationServer 결과 + 사용자 프로필 사용)
         ## input : stores, user_profile
+        ################################################ 3. DiscountServer
         print(f"\n[3/6] 💰 DiscountServer 호출 중...")
+        discounts_by_store: Dict[str, Any] = {}
+
         if mode[2] and not mode[3]:
-            
             discount_result = await self.discount_server.get_discounts(
                 stores=stores,
-                user_profile=user_profile
+                user_profile=user_profile,
             )
-        
-            ### not mode[3] 이라는 소리는 Recommendation server까지의 넘어갈 필요가 없다는 것이므로 여기서 종료.
-            return 
-        else:
-            pass
-            ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
-            
-        ### output 다음 단계로 전달할 변수들
-        ### 미정
-        
-        
+            discounts_by_store = discount_result.get("discounts_by_store", {})
+
+            # mode[2] == True이고 mode[3] == False면 여기까지가 목표이므로 바로 반환
+            if not mode[3]:
+                return {
+                    "success": discount_result.get("success", False),
+                    "response": discount_result.get("message", ""),
+                    "stores": stores,
+                    "reviews": reviews,
+                    "discounts_by_store": discounts_by_store,
+                    "mcp_results": {
+                        **mcp_results,
+                        "discounts_by_store": discounts_by_store,
+                    },
+                    "error": discount_result.get("error"),
+                }
+
+            # 여기서부터는 RecommendationServer / RAG / LLM 이어지는 로직...
+            # (나중에 만들 때 discounts_by_store 넘겨주면 됨)
+            mcp_results["discount"] = {
+                "message": discount_result.get("message"),
+                "discounts_by_store": discounts_by_store,
+                "raw": discount_result.get("raw_response"),
+            }
         
         # 4. RecommendationServer (할인율 순, 거리 순 등 정렬 결과 만들기)
         print(f"\n[4/6] 🎯 RecommendationServer 호출 중...")
@@ -922,6 +769,7 @@ class LLMEngine:
         # RAG (벡터 DB 생성 및 검색) - 스텁
         if mode[4]:
             print(f"\n[6/6] 🔍 RAG 처리 중...")
+           
             rag_result = self.rag_pipeline.process(
                 user_query=user_query,
                 recommendations=recommendations,
@@ -980,7 +828,6 @@ if FASTAPI_AVAILABLE:
         user_id: str  # 필수로 변경!
         context: Optional[Dict[str, Any]] = None
         user_profile: Optional[Dict[str, Any]] = None
-        user_categories: Optional[List[str]] = None
         
         class Config:
             json_schema_extra = {
@@ -992,14 +839,15 @@ if FASTAPI_AVAILABLE:
                 "user_profile": {
                     "telco": "SKT",
                     "memberships": ["VIP"],
-                    "cards": ["T-Lounge"]
-                },
-                "user_categories": [
+                    "cards": ["T-Lounge"],
+                    "categories": [
                     "가성비",
                     "모임",
                     "혼밥",
                     "분위기"
-                ]
+                    ]
+                },
+                
             }
         }
     
@@ -1036,54 +884,7 @@ if FASTAPI_AVAILABLE:
         allow_headers=["Content-Type", "X-API-Key"],
     )
     
-    # IP/포트 기반 접근 제어 미들웨어
-    @app.middleware("http")
-    async def access_control_middleware(request: Request, call_next):
-        """IP/포트 기반 접근 제어"""
-        # 개발자 모드가 활성화되어 있으면 모든 접근 허용
-        if ACCESS_CONFIG.get("developer_mode", True):
-            response = await call_next(request)
-            return response
-        
-        # 클라이언트 IP 추출
-        client_ip = request.client.host if request.client else "unknown"
-        
-        # IP 화이트리스트 체크
-        if ACCESS_CONFIG.get("enable_ip_whitelist", False):
-            allowed_ips = ACCESS_CONFIG.get("allowed_ips", [])
-            if client_ip not in allowed_ips and "localhost" not in client_ip:
-                return HTTPException(
-                    status_code=403,
-                    detail=f"접근이 거부되었습니다. 허용된 IP: {', '.join(allowed_ips)}"
-                )
-        
-        # 포트 체크는 서버 시작 시점에만 가능하므로 여기서는 로깅만
-        response = await call_next(request)
-        return response
-    
-    # 정적 파일 서빙 (웹 UI)
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.exists(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-    
-    # 웹 UI 라우트
-    @app.get("/", response_class=HTMLResponse)
-    async def web_ui():
-        """웹 UI 홈페이지"""
-        ui_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
-        if os.path.exists(ui_path):
-            return FileResponse(ui_path)
-        else:
-            return HTMLResponse("""
-            <html>
-                <head><title>위치 기반 할인 서비스</title></head>
-                <body>
-                    <h1>위치 기반 할인 서비스 API</h1>
-                    <p>웹 UI 파일을 찾을 수 없습니다. static/index.html 파일을 확인하세요.</p>
-                    <p>API 엔드포인트: <a href="/ping">/ping</a></p>
-                </body>
-            </html>
-            """)
+   
     
     # API 키 검증 함수 (주요 보안 수단)
     async def verify_api_key(x_api_key: str = Header(None)):
@@ -1166,7 +967,6 @@ if FASTAPI_AVAILABLE:
                 latitude=latitude,
                 longitude=longitude,
                 user_id=request.user_id,
-                user_categories=request.user_categories,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
                 mode=[1,1,0,0,0]  # location server까지 실행
             )
