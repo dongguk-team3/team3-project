@@ -26,6 +26,8 @@ from chat_filter_pipeline import ChatFilterPipeline
 from llm_responder import call_openai_llm
 # Location Module 통합
 from location_module import LocationModule
+# Recommendation Engine 통합
+from recommendation_engine import RecommendationEngine
 
 # Location Server (네이버 지오코딩) 통합 준비
 LOCATION_SERVER_PATHS = [
@@ -340,11 +342,58 @@ class RecommendationServer:
     
     def __init__(self):
         """초기화"""
-        # TODO: 실제 추천 MCP 서버 경로 설정
-        self.server_path = "실제 파일 경로로 바꿀 것."
-        # 예시: self.server_path = "/opt/conda/envs/team/OSS/mcp-server/Recommendation_server/recommendation_server.py"
-        self.is_implemented = False
+        self.recommendation_engine = RecommendationEngine()
+        self.is_implemented = True
     
+    async def get_recommendations(
+        self,
+        user_id: str,
+        stores: List[str],
+        discounts: Dict[str, Any],
+        user_profile: Dict[str, Any] = None,
+        user_latitude: Optional[float] = None,
+        user_longitude: Optional[float] = None,
+        stores_detail: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        추천 결과 생성
+        
+        Args:
+            user_id: 사용자 ID
+            stores: 매장 리스트
+            discounts: 매장별 할인 정보
+            user_profile: 사용자 프로필
+            user_latitude: 사용자 위도 (거리 계산용)
+            user_longitude: 사용자 경도 (거리 계산용)
+            stores_detail: 매장 상세 정보 리스트 (좌표 포함, 거리 계산용)
+            
+        Returns:
+            추천 결과 (개인화, 전체할인순, 거리순)
+        """
+        try:
+            recommendations = self.recommendation_engine.process_recommendations(
+                stores=stores,
+                discounts_by_store=discounts,
+                user_profile=user_profile or {},
+                user_latitude=user_latitude,
+                user_longitude=user_longitude,
+                stores_detail=stores_detail
+            )
+            
+            return {
+                "success": True,
+                "message": "추천 계산 완료",
+                "recommendations": recommendations,
+                "user_id": user_id
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"추천 계산 오류: {str(e)}",
+                "recommendations": {},
+                "error": str(e)
+            }    
 
 
 
@@ -562,90 +611,33 @@ class LLMEngine:
                 user_id=user_id,
                 stores=stores,
                 discounts=discounts_by_store,
+                user_profile=user_profile,
+                user_latitude=latitude,
+                user_longitude=longitude,
+                stores_detail=mcp_results.get("stores_detail")
             )
-
+            recommendations = recommendation_result.get("recommendations", {})
             
+            # mode[3] == True이고 mode[4] == False면 여기까지가 목표이므로 바로 반환
+            if not mode[4]:
+                return {
+                    "success": recommendation_result.get("success", False),
+                    "response": recommendation_result.get("message", "추천 계산 완료"),
+                    "stores": stores,
+                    "reviews": reviews,
+                    "discounts_by_store": discounts_by_store,
+                    "recommendations": recommendations,
+                    "mcp_results": {
+                        **mcp_results,
+                        "recommendations": recommendations,
+                    },
+                    "error": recommendation_result.get("error"),
+                }
+            
+            # RAG 단계로 넘어갈 때 recommendations 전달
+            mcp_results["recommendations"] = recommendations                
             ### not mode[4] 이라는 소리는 RAG까지의 넘어갈 필요가 없다는 것이므로 여기서 종료.
-            return 
-        else:
-            pass
-            ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
-        
-        ### output 다음 단계로 전달할 변수들
-        ### recommendations: 추천 결과 리스트 (할인율 순, 거리순)
-        # 아래는 예시 데이터 구조 
-        #   recommendations = {
-        #     "by_discount": {
-            #     "store_list": [
-            #         {
-            #             "store_id": "s1",
-            #             "name": "맘스터치",
-            #             "distance_meters": 200,
-            #             "all_benefits": [
-            #                 {
-            #                     "discountName": "신메뉴 출시 20% 할인",
-            #                     "providerType": "STORE",
-            #                     "providerName": "맘스터치",
-            #                     "shape": {"kind": "PERCENT", "amount": 20.0, "maxAmount": None},
-            #                 },
-            #                 {
-            #                     "discountName": "멤버십 적립 5000원",
-            #                     "providerType": "MEMBERSHIP",
-            #                     "providerName": "MPOINT",
-            #                     "shape": {"kind": "AMOUNT", "amount": 5000.0, "maxAmount": None},
-            #                 },
-            #             ],
-            #             "rank": 1,
-            #         },
-            #         {
-            #             "store_id": "s2",
-            #             "name": "은화수식당",
-            #             "distance_meters": 350,
-            #             "all_benefits": [
-            #                 {
-            #                     "discountName": "CJ ONE 10% 할인",
-            #                     "providerType": "MEMBERSHIP",
-            #                     "providerName": "CJ ONE",
-            #                     "shape": {"kind": "PERCENT", "amount": 10.0, "maxAmount": None},
-            #                 },
-            #                 {
-            #                     "discountName": "리뷰작성시 음료증정",
-            #                     "providerType": "STORE",
-            #                     "providerName": "은화수식당",
-            #                     "shape": {"kind": "AMOUNT", "amount": 0.0, "maxAmount": None},
-            #                 },
-            #             ],
-            #             "rank": 2,
-            #         },
-            #         {
-            #             "store_id": "s3",
-            #             "name": "중국성",
-            #             "distance_meters": 180,
-            #             "all_benefits": [
-            #                 {
-            #                     "discountName": "T멤버십 1000원당 150원 할인",
-            #                     "providerType": "TELCO",
-            #                     "providerName": "SKT",
-            #                     "shape": {
-            #                         "kind": "PER_UNIT",
-            #                         "amount": 0.0,
-            #                         "maxAmount": 3000.0,
-            #                         "unitRule": {"unitAmount": 1000.0, "perUnitValue": 150.0, "maxDiscountAmount": 3000.0},
-            #                     },
-            #                 }
-            #             ],
-            #             "rank": 3,
-            #         },
-            #     ]
-            # },
-            # "by_distance": {
-            #     "store_list": [
-            #         {"store_id": "s3", "name": "중국성", "distance_meters": 180, "rank": 1},
-            #         {"store_id": "s1", "name": "맘스터치", "distance_meters": 200, "rank": 2},
-            #         {"store_id": "s2", "name": "은화수식당", "distance_meters": 350, "rank": 3},
-            #     ]
-            # },
-        # }
+
         
         
         ## recomendation server의 output
@@ -856,7 +848,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,0,0,0]  # location server까지 실행
+                mode=[1,1,1,0,0]  # location server까지 실행
             )
             
             if not result["success"]:
