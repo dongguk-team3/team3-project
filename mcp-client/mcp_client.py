@@ -574,12 +574,8 @@ class LLMEngine:
         else:
             place_type = place_type_value or "음식점"
 
-        resolved_latitude, resolved_longitude = await self._determine_coordinates(
-            location_value=keywords.get("location"),
-            fallback_lat=latitude,
-            fallback_lon=longitude,
-        )
-        location = resolved_latitude, resolved_longitude
+        
+       
         attributes = keywords.get("attributes", [])
         user_profile = extracted_user_profile
         
@@ -594,7 +590,6 @@ class LLMEngine:
         
         ################################################ 2. LocationServer
         print(f"\n[2/6] 📍 LocationServer 호출 중...")
-        
         
         ## input: location, place_type
         location_payload = self.location_module.prepare_location_stage(
@@ -968,7 +963,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,0,0,0]  # location server까지 실행
+                mode=[1,1,1,0,0]  # location server까지 실행
             )
             
             if not result["success"]:
