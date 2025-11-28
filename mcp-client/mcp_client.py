@@ -29,7 +29,7 @@ from location_module import LocationModule
 
 # Location Server (네이버 지오코딩) 통합 준비
 LOCATION_SERVER_PATHS = [
-    Path("/Users/goyuji/mcp-server/Location_server"),
+    Path("opt/conda/envs/team/OSS/mcp-server/Location_server"),
     Path(__file__).resolve().parent / "Location_server",
     Path(__file__).resolve().parent.parent / "Location_server",
 ]
@@ -85,75 +85,6 @@ except ImportError:
 # API 키 (팀원들과 공유할 비밀 키)
 API_KEY = os.getenv("API_KEY", "OSS_TEAM_SECRET_KEY_2025")
 
-
-
-# nearby_reviews.py 출력 형식과 동일한 기본 샘플 (파일이 없을 때 사용)
-DEFAULT_NEARBY_SAMPLE = {
-    "stores": [
-        "장충동커피",
-        "기브온 카페인바",
-        "포우즈",
-        "스트릿 그릭요거트 카페",
-        "로이터 커피 셸터",
-        "프릳츠 장충점",
-        "커피드니로",
-        "미드템포",
-        "포미스커피",
-        "하우스 커피 앤 디저트",
-    ],
-    "reviews": {
-        "장충동커피": [
-            "생각없이 방문했는데 커피 퀄리티가 너무 좋와서 놀랐네요 따듯한 아메리카노 샷 추가 추천합니다",
-            "굿",
-            "테이크전문 커피숍인데 가성비 좋네요",
-        ],
-        "기브온 카페인바": [
-            "생레몬 구겔호프 상큼하니 맛있어요!\\n카페 오는 길 남산타워가 환상입니다...",
-            "커피는 물론이고 디저트가 아주 훌륭합니다 특히 비스코티는 중독적이네요.. 또 먹으러 가겠습니다",
-            "매장 입장과 동시에 고소한 커피 향이 솔솔~~\\n커피 향도 너무 좋고 진하고 요기 요기 충무로 필동 원탑 커피 맛집입니다👌🏻🩷",
-        ],
-        "포우즈": [
-            "굿",
-            "굿",
-            "루프탑카페. 날씨좋을때 가면 좋음",
-        ],
-        "스트릿 그릭요거트 카페": [
-            "그릭요거트 땡겨서 먹으러왔는데 다른 데에 비해 가성비가 좋아요 사장님도 친절하셔서 좋아요💫",
-            "가게 너무 귀엽고 무화과 요거트 너무 맛있어요",
-            "고즈넉한 분위기의 맛있는 요거트집이에요. 무화과볼 처돌이로써 이곳 무화과 진짜 신선하고요",
-        ],
-        "로이터 커피 셸터": [
-            "필동로를 따라 걷다보면 3층의 넓은 카페입니다!! 뷰도 아늑하고 커피도 맛있어서 풀만족합니다",
-            "카페보단,갤러리나 스튜디오 느낌의 공간",
-            "좋아요",
-        ],
-        "프릳츠 장충점": [
-            "아내와 연애 시절 추억이 있던 프릳츠.",
-            "드디어 원두랑 드립 라인업 맞춰놨네…",
-            "카페의 고즈넉한 분위기와 음악이 커피의 맛과 향에  더 취하게 하는 기억에 남을 곳입니다",
-        ],
-        "커피드니로": [
-            "배우..아니 사장님 진짜로 커피에 진심이시군요...",
-            "태인호 배우님의 팬으로 남양주에서 찾아갔는데 커피 맛집이네요.",
-            "커피는드니로배우는태인호",
-        ],
-        "미드템포": [
-            "분위기가 좋고 음료도 다 맛있어요!!",
-            "학교 근처여서 들려봤는데 너무 좋고 라떼도 너무너무 맛있었어요!!",
-            "분위기도 너무 좋고 동국대 제휴 할인도 됩니다!",
-        ],
-        "포미스커피": [
-            "쿠키가 다양하고 너무 맛있어요~!! 묵직함",
-            "👍🏻👍🏻👍🏻말차쿠키 단골",
-            "충무로역에서 동국대 후문 인근 카페입니다.",
-        ],
-        "하우스 커피 앤 디저트": [
-            "소금빵이랑 기본 휘낭시에 샀는데 휘낭시에에서 마늘빵맛 나요 ㅠㅠ",
-            "한국적이고 어릴때 먹던 수정과 생각나는 맛이예요",
-            "가을만끽하기 좋은 동국대 인근 숲속 위치~~",
-        ],
-    },
-}
 
 # OpenAI API 키 로드
 def load_openai_api_key():
@@ -476,25 +407,7 @@ class LLMEngine:
         print(f"   질문: {user_query}")
         print(f"   위치: ({latitude}, {longitude})")
         
-        # 프로필 정보 요약 출력
-        if user_profile:
-            profile_parts = []
-            if user_profile.get("telco"):
-                profile_parts.append(f"통신사: {user_profile.get('telco')}")
-            if user_profile.get("memberships"):
-                profile_parts.append(f"멤버십: {', '.join(user_profile.get('memberships', []))}")
-            if user_profile.get("cards"):
-                profile_parts.append(f"카드: {', '.join(user_profile.get('cards', []))}")
-            if user_profile.get("categories"):
-                profile_parts.append(f"선호카테고리: {', '.join(user_profile.get('categories', []))}")
-            if profile_parts:
-                print(f"   프로필(user_profile): {', '.join(profile_parts)}")
-            else:
-                print(f"   프로필(user_profile): (빈 프로필)")
-        else:
-            print(f"   프로필(user_profile): None")
         
-        print("="*60)
         
         if mode is None:
             print(" 처리 모드 지정 필요.")
@@ -507,25 +420,6 @@ class LLMEngine:
         ################################################ 1. Prompt Filtering 도메인 제한 및 지도 검색 키워드 추출
         
         print(f"\n[1/6] 🛡️  ChatFilterPipeline 실행 중...")
-        
-        # User Profile 생성 (user_id 기반 기본값)
-        base_user_profile = {
-            "userId": user_id,
-            "telco": "SKT",  # TODO: 실제 사용자 데이터로 대체
-            "memberships": [],
-            "cards": [],
-            "affiliations": []
-        }
-        # 외부에서 전달된 user_profile이 있으면 기본값과 병합
-        if user_profile:
-            provided_profile = {
-                key: value for key, value in user_profile.items()
-                if value is not None
-            }
-            base_user_profile.update(provided_profile)
-        # 서버가 받은 user_id를 강제 주입해 일관성 유지
-        base_user_profile["userId"] = user_id
-        user_profile = base_user_profile
         
         
         # ChatFilterPipeline 실행
@@ -573,9 +467,7 @@ class LLMEngine:
             place_type = place_type_value[0] if place_type_value else "음식점"
         else:
             place_type = place_type_value or "음식점"
-
-        
-       
+            
         attributes = keywords.get("attributes", [])
         user_profile = extracted_user_profile
         
@@ -590,6 +482,7 @@ class LLMEngine:
         
         ################################################ 2. LocationServer
         print(f"\n[2/6] 📍 LocationServer 호출 중...")
+        
         
         ## input: location, place_type
         location_payload = self.location_module.prepare_location_stage(
@@ -963,7 +856,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,1,0,0]  # location server까지 실행
+                mode=[1,1,0,0,0]  # location server까지 실행
             )
             
             if not result["success"]:
