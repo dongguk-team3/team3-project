@@ -103,11 +103,12 @@ def get_places_around(
                       lon: float,
                       radius_m: int = 1000,
                       limit: int = 60,
-                      offset: Optional[int] = None) -> List[Dict[str, Any]]:
+                      offset: Optional[int] = None,
+                      place_type: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     smart-around/places 엔드포인트를 이용해서
     (lat, lon) 주변 가게 목록을 가져온 뒤,
-    distance <= radius_m 인 것만 필터링한다.
+    distance <= radius_m 및 place_type이 매칭되는 것만 필터링한다.
 
     주의: searchCoord는 '경도;위도' 형식이다.
     """
@@ -145,13 +146,18 @@ def get_places_around(
         if dist_m > radius_m:
             continue
 
+        category_joined = ",".join(it.get("category") or [])
+        category_name = it.get("categoryName", "") or ""
+        if place_type and (place_type not in category_name and place_type not in category_joined):
+            continue
+
         places.append(
             {
                 "id": it.get("id"),
                 "name": it.get("name"),
                 "distance": dist_m,
-                "category": ",".join(it.get("category") or []),
-                "categoryName": it.get("categoryName"),
+                "category": category_joined,
+                "categoryName": category_name,
                 "address": it.get("address"),
                 "roadAddress": it.get("roadAddress"),
                 "x": it.get("x"),
@@ -260,6 +266,7 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
             radius_m=radius,
             limit=page_limit,
             offset=offset,
+            place_type=place_type,
         )
         if not batch:
             break
@@ -277,34 +284,13 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
         offset += page_limit
 
     if not candidate_places:
-        print(f"[WARN] radius={radius}m 안에서 가게를 찾지 못함")
+        if place_type:
+            print(f"[WARN] place_type='{place_type}', radius={radius}m 안에서 가게를 찾지 못함")
+        else:
+            print(f"[WARN] radius={radius}m 안에서 가게를 찾지 못함")
         sys.exit(1)
     if len(candidate_places) < places:
         print(f"[ERROR] 요청한 {places}개를 채우지 못했습니다. 확보={len(candidate_places)}")
-        sys.exit(1)
-
-    # 2) place_type으로 필터링
-    if place_type:
-        filtered_places = []
-        for place in candidate_places:
-            category_name = place.get("categoryName", "") or ""
-            category = place.get("category", "") or ""
-            if place_type in category_name or place_type in category:
-                filtered_places.append(place)
-
-        if not filtered_places:
-            print(f"[WARN] place_type='{place_type}'에 해당하는 가게를 찾지 못함")
-            sys.exit(1)
-        candidate_places = filtered_places
-        if len(candidate_places) < places:
-            print(
-                f"[ERROR] place_type='{place_type}' 필터 후 {len(candidate_places)}개로 "
-                f"요청한 {places}개를 채우지 못했습니다."
-            )
-            sys.exit(1)
-
-    if not candidate_places:
-        print(f"[WARN] place_type='{place_type}'에 해당하는 가게를 찾지 못함")
         sys.exit(1)
 
     # 3) 무작위로 places개 샘플링
