@@ -292,13 +292,16 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
             if place_type in category_name or place_type in category:
                 filtered_places.append(place)
 
-        if filtered_places and len(filtered_places) >= places:
-            candidate_places = filtered_places
-        else:
+        if not filtered_places:
+            print(f"[WARN] place_type='{place_type}'에 해당하는 가게를 찾지 못함")
+            sys.exit(1)
+        candidate_places = filtered_places
+        if len(candidate_places) < places:
             print(
-                f"[WARN] place_type='{place_type}' 필터 결과 {len(filtered_places)}개, "
-                f"요청한 {places}개에 미달하여 필터 미적용 목록 사용"
+                f"[ERROR] place_type='{place_type}' 필터 후 {len(candidate_places)}개로 "
+                f"요청한 {places}개를 채우지 못했습니다."
             )
+            sys.exit(1)
 
     if not candidate_places:
         print(f"[WARN] place_type='{place_type}'에 해당하는 가게를 찾지 못함")
