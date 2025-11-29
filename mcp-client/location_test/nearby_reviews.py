@@ -10,6 +10,17 @@ M_URL = "https://m.place.naver.com/restaurant/{place_id}/review/visitor?reviewSo
 PC_URL = "https://pcmap.place.naver.com/restaurant/{place_id}/review/visitor"
 SMART_AROUND_URL = "https://map.naver.com/p/api/smart-around/places"
 
+def _normalize_place_type(place_type: Optional[str]) -> Optional[str]:
+    """사용자 입력 place_type을 네이버 카테고리 문자열에 맞게 단순 정규화."""
+    if not place_type:
+        return None
+    pt = place_type.strip()
+    if pt == "맛집":
+        return "음식점"
+    if pt.endswith("집") and len(pt) > 1:
+        return pt[:-1]
+    return pt
+
 # 브라우저 안에서 fetch로 GraphQL을 직접 호출 (쿠키/토큰/Origin 자동세팅)
 INPAGE_FETCH = r"""
 async ({ placeId, size }) => {
@@ -136,7 +147,8 @@ def get_places_around(
 
     items = ((data.get("result") or {}).get("list")) or []
     places: List[Dict[str, Any]] = []
-
+    place_type = _normalize_place_type(place_type)
+    
     for it in items:
         dist_raw = it.get("distance")
         try:
@@ -253,8 +265,8 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
     candidate_places: List[Dict[str, Any]] = []
     seen_ids = set()
     offset = 0
-    page_limit = min(max(places, 20), 50)  # 요청당 크기 조절(과도한 대기 방지)
-    max_pages = 5  # 네트워크 대기 시간 상한
+    page_limit = 60  # 요청당 크기 조절(과도한 대기 방지)
+    max_pages = 10  # 네트워크 대기 시간 상한
 
     for _ in range(max_pages):
         if len(candidate_places) >= places:
@@ -288,10 +300,7 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
             print(f"[WARN] place_type='{place_type}', radius={radius}m 안에서 가게를 찾지 못함")
         else:
             print(f"[WARN] radius={radius}m 안에서 가게를 찾지 못함")
-        sys.exit(1)
-    if len(candidate_places) < places:
-        print(f"[ERROR] 요청한 {places}개를 채우지 못했습니다. 확보={len(candidate_places)}")
-        sys.exit(1)
+        
 
     # 3) 무작위로 places개 샘플링
     if len(candidate_places) > places:
