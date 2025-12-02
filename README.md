@@ -34,14 +34,13 @@
 
 ### Server/Infra
 
-- PostgreSQL, Naver Map API
+- PostgreSQL, Naver Map API, Linux (Ubuntu)
 
 ### Stack/Libs
 
 - Python, Kotlin
 - OkHttp/Retrofit, Gson (Android)
 - openai, google-generativeai, chromadb, asyncpg, aiohttp
-- 보안: API Key 헤더(`X-API-Key`)
 
 ---
 
