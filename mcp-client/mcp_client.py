@@ -727,7 +727,7 @@ class LLMEngine:
             return {
                 "success": True,
                 "query": user_query,
-                "llm_response": llm_response,
+                "response": llm_response,
                 "mcp_results": mcp_results,
                 "rag_result": rag_result,
                 "discount_summary": discount_summary,
@@ -891,7 +891,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,1,1,1]  # location server까지 실행
+                mode=[1,1,1,0,0]  # location server까지 실행
             )
             
             if not result["success"]:
@@ -905,7 +905,7 @@ if FASTAPI_AVAILABLE:
             return RecommendResponse(
                 success=True,
                 query=request.query,
-                response=result["llm_response"],
+                response=result["response"],
                 mcp_results=result.get("mcp_results")
             )
             

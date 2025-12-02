@@ -49,11 +49,6 @@ try:
 except Exception:
     pass
 
-# 멀티프로세싱 래퍼 (필요 시 사용)
-try:
-    from mp_rag_process import mp_process  # noqa: F401
-except Exception:
-    mp_process = None  # Optional fallback
 
 EMBED_MODEL_NAME = "models/text-embedding-004"
 
@@ -685,35 +680,36 @@ class VectorDBManager:
         naive_cosine_score= self._naive_cosine_similarity_score(cat_text, review_text)
         return naive_cosine_score
 
-    def _llm_similarity_score(self, query_text: str, review_text: str) -> float:
-        """Gemini 생성 모델로 쿼리-리뷰 관련도를 0~1 점수로 요청."""
-        if not query_text or not review_text:
-            return 0.0
-        try:
+    ## 해당 구현은 시간이 너무 오래걸리는 문제로 인해 폐기.
+    # def _llm_similarity_score(self, query_text: str, review_text: str) -> float:
+    #     """Gemini 생성 모델로 쿼리-리뷰 관련도를 0~1 점수로 요청."""
+    #     if not query_text or not review_text:
+    #         return 0.0
+    #     try:
 
-            model = genai.GenerativeModel(self.rerank_model_name or "gemini-2.5-flash")
+    #         model = genai.GenerativeModel(self.rerank_model_name or "gemini-2.5-flash")
           
-            prompt = (
-                "다음 사용자 요청과 리뷰가 얼마나 잘 맞는지 0~1 사이 소수로만 출력하세요.\n"
-                "0은 전혀 무관, 1은 매우 강하게 관련. 한 줄에 숫자만 출력.\n"
-                f"사용자 요청: {query_text}\n"
-                f"리뷰: {review_text[:600]}"
-            )
+    #         prompt = (
+    #             "다음 사용자 요청과 리뷰가 얼마나 잘 맞는지 0~1 사이 소수로만 출력하세요.\n"
+    #             "0은 전혀 무관, 1은 매우 강하게 관련. 한 줄에 숫자만 출력.\n"
+    #             f"사용자 요청: {query_text}\n"
+    #             f"리뷰: {review_text[:600]}"
+    #         )
             
-            resp = model.generate_content(
-                contents=prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0,
-                ),
-            )
-            text = (resp.text or "").strip()
-            match = re.search(r"([01](?:\.\d+)?|0?\.\d+)", text)
-            if not match:
-                return 0.0
-            val = float(match.group(1))
-            return min(max(val, 0.0), 1.0)
-        except Exception:
-            return 0.0
+    #         resp = model.generate_content(
+    #             contents=prompt,
+    #             generation_config=genai.types.GenerationConfig(
+    #                 temperature=0,
+    #             ),
+    #         )
+    #         text = (resp.text or "").strip()
+    #         match = re.search(r"([01](?:\.\d+)?|0?\.\d+)", text)
+    #         if not match:
+    #             return 0.0
+    #         val = float(match.group(1))
+    #         return min(max(val, 0.0), 1.0)
+    #     except Exception:
+    #         return 0.0
 
     def _naive_cosine_similarity_score(self, text_a: str, text_b: str) -> float:
         """임베딩 기반 코사인 유사도 (LLM 호출 없이 빠른 대안)."""
@@ -787,6 +783,8 @@ class VectorDBManager:
         )
         score += review_bonus
         meta["llm_review_score"] = llm_review_score
+        
+        meta["user_categories"] = user_categories or []
         return max(score, 0.0)
 
     def _apply_diversity_gate(self, results: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
@@ -837,7 +835,6 @@ class RAGPipeline:
 
     def __init__(self):
         self.vector_db = VectorDBManager()
-        self.mp_runner = mp_process
 
     def process(
         self,
@@ -946,6 +943,9 @@ class RAGPipeline:
             hint_text = f" 혜택 받는 방법: {hint}" if hint else ""
             llm_sim = meta.get("llm_review_score")
             raw_text = f" (리뷰-요청 관련도={llm_sim})" if llm_sim is not None else ""
+            user_categories = meta.get("user_categories") or []
+            if user_categories:
+                raw_text += f" (사용자 선호 카테고리: {', '.join(user_categories)})"
             lines.append(
                 f"{idx}. {meta.get('store_name')} – {discount_text}, 거리 {distance or 'N/A'}m{raw_text}. {review_text}{hint_text}"
             )
@@ -953,6 +953,7 @@ class RAGPipeline:
         lines.append(
             "\n지침: 위 후보만을 근거로, 리뷰 내용과 사용자 요청의 매칭을 최우선으로 고려하고, 그 다음으로 할인/거리 순으로 판단하세요. "
             "리뷰-요청 관련도 값이 높을수록 리뷰-사용자 요청 매칭이 잘 된 후보입니다. 정보가 없으면 '정보가 없습니다'라고 답변하세요."
+            "사용자 카테고리 항목은 비어있지 않을경우 반드시 반영하세요. 카테고리에 들어올 수 있는 종류는 모임, 분위기, 가성비, 혼밥 입니다."
             "아래 예시처럼 순위제시 까지만 작성."
             "불필요한 추가 멘트 금지."
             "\n 예시1. : 사용자 쿼리: 강남역 주변 프랜차이즈 카페좀 추천해줘 대답: 강남역 근처 **프랜차이즈 카페** 중에서,"
@@ -976,7 +977,7 @@ class RAGPipeline:
                 "\n- 총평: 분위기 좋은 체인 카페를 원하면 적합."
                 
             "\n 예시2. : 사용자 쿼리: 충무로역 주변 분위기 좋은 카페좀 추천해줘"
-            "충무로역 근처에서 **분위기 좋고 가성비도 괜찮아 보이는 카페**를 리뷰 기반으로 골라 추천드릴게요"
+                "사용자 카테고리에 의한 선호 항목인 **모임 · 분위기** 기준으로 리뷰 내용과 관련도 우선 고려해 추천드립니다"
 
                 "\n1. 카페차 충무로점"
                 "\n- 리뷰에 분위기 좋다는 언급이 가장 많음"
@@ -992,9 +993,7 @@ class RAGPipeline:
                 "\n- 테이블 간격 넓고 편안한 분위기"
                 "\n- 커피 맛 좋고 베이커리 종류 다양"
                 "\n- 작업/대화 모두 하기 좋은 공간이라는 리뷰"
-            
         )
-        
         
         return "\n".join(lines)
 
