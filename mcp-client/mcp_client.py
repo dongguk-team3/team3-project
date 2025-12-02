@@ -20,6 +20,13 @@ from pathlib import Path
 import argparse
 import aiohttp
 
+# .env 로드 (API_KEY 등)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except Exception:
+    pass
+
 # RAG 통합
 from RAG.rag_module import RAGPipeline
 from chat_filter_pipeline import ChatFilterPipeline
@@ -87,6 +94,10 @@ except ImportError:
 # API 키 (팀원들과 공유할 비밀 키)
 API_KEY = os.getenv("API_KEY")
 
+if API_KEY:
+    print(f"✅ API 키 로드 완료")
+else:
+    print(f"⚠️  API 키가 설정되지 않았습니다. 환경 변수 'API_KEY'를 설정하세요.")
 
 # OpenAI API 키 로드
 def load_openai_api_key():
