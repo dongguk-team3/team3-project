@@ -386,10 +386,10 @@ async def main():
     location_module = LocationModule()
     
     # 테스트용 입력값 설정
-    latitude = 37.5612  # 충무로역
-    longitude = 126.9960  # 충무로역
-    place_type = "음식점"
-    attributes = ["맛집", "분위기 좋은"]
+    latitude = 37.4981 # 충무로역
+    longitude = 127.0283  # 충무로역
+    place_type = "중식집"
+    attributes = ["분위기 좋은"]
     
     print(f"\n📌 입력 파라미터:")
     print(f"  - 위도(latitude): {latitude}")
@@ -399,7 +399,7 @@ async def main():
     
     # 1. 좌표 결정 테스트 (지오코딩)
     print(f"\n[1/2] 🗺️  좌표 결정 테스트...")
-    test_location = "충무로역"
+    test_location = "강남역"
     resolved_lat, resolved_lon = await location_module.determine_coordinates(
         location_value=test_location,
         fallback_lat=latitude,

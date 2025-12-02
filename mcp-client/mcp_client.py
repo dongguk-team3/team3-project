@@ -85,7 +85,7 @@ except ImportError:
 
 
 # API 키 (팀원들과 공유할 비밀 키)
-API_KEY = os.getenv("API_KEY", "OSS_TEAM_SECRET_KEY_2025")
+API_KEY = os.getenv("API_KEY")
 
 
 # OpenAI API 키 로드
@@ -276,13 +276,13 @@ class DiscountServer:
             async with stdio_client(server_params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                    
+    
                     #  서버 쪽 함수 시그니처가 (userProfile, stores)이므로
                     payload = {
                         "userProfile": user_profile,
                         "stores": stores,
                     }
-                    
+        
                     # 서버의 tool 이름: "get_discounts_for_stores"
                     result = await session.call_tool(
                         "get_discounts_for_stores",
@@ -317,9 +317,20 @@ class DiscountServer:
                             "raw_response": response_text,
                         }
                     
-                    # DiscountService가 어떤 키를 넣어주든 받아서 넘겨주기
-                    discounts_by_store = parsed.get("discounts_by_store", {})
-                    
+                    results_list = parsed.get("results", [])
+                    discounts_by_store: Dict[str, Any] = {}
+
+                    for item in results_list:
+                        store_name = item.get("inputStoreName")
+                        if not store_name:
+                            continue
+                        discounts_by_store[store_name] = {
+                            "matched": item.get("matched", True if item.get("merchant") else False),
+                            "reason": item.get("reason"),
+                            "merchant": item.get("merchant"),
+                            "discounts": item.get("discounts", []),
+                        }
+
                     return {
                         "success": parsed.get("success", True),
                         "message": parsed.get("message", "할인 정보 조회 성공"),
@@ -542,21 +553,34 @@ class LLMEngine:
             )
         stores = location_payload.get("stores", [])
         reviews = location_payload.get("reviews", {})
+        
+        # stores가 문자열 리스트인지 딕셔너리 리스트인지 확인하여 stores_detail 추출
+        stores_detail = None
+        if stores:
+            if isinstance(stores[0], dict):
+                # 딕셔너리 리스트인 경우 (상세 정보 포함)
+                stores_detail = stores
+                stores = [store.get("title") or store.get("name", "") for store in stores]
+            else:
+                # 문자열 리스트인 경우 (stores_detail 없음)
+                stores_detail = None
+        
         mcp_results = {
             "step": "location_server",
-            "stores": stores,
+                "stores": stores,
             "reviews": reviews,
+            "stores_detail": stores_detail,  # 거리 계산용 상세 정보
             "meta": location_payload.get("meta"),
-        }
+            }
         if mode[1] and not mode[2]:
-            return {
+                return {
                 "success": location_payload.get("success", False),
                 "response": location_payload.get("message", "LocationServer 완료"),
                 "stores": stores,
                 "reviews": reviews,
-                "mcp_results": mcp_results,
+                    "mcp_results": mcp_results,
                 "error": location_payload.get("error"),
-            }
+                }
             
          
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
@@ -573,36 +597,45 @@ class LLMEngine:
         ################################################ 3. DiscountServer
         print(f"\n[3/6] 💰 DiscountServer 호출 중...")
         discounts_by_store: Dict[str, Any] = {}
-
-        if mode[2] and not mode[3]:
+            
+        if mode[2]:
             discount_result = await self.discount_server.get_discounts(
                 stores=stores,
                 user_profile=user_profile,
             )
             discounts_by_store = discount_result.get("discounts_by_store", {})
 
-            # mode[2] == True이고 mode[3] == False면 여기까지가 목표이므로 바로 반환
-            if not mode[3]:
-                return {
-                    "success": discount_result.get("success", False),
-                    "response": discount_result.get("message", ""),
-                    "stores": stores,
-                    "reviews": reviews,
-                    "discounts_by_store": discounts_by_store,
-                    "mcp_results": {
-                        **mcp_results,
-                        "discounts_by_store": discounts_by_store,
-                    },
-                    "error": discount_result.get("error"),
-                }
+            # 🔥 matched=true인 매장만 필터링
+            filtered_discounts = {
+                store: data
+                for store, data in discounts_by_store.items()
+                if data.get("matched", True)   # matched=true 만 남김
+            }
 
-            # 여기서부터는 RecommendationServer / RAG / LLM 이어지는 로직...
-            # (나중에 만들 때 discounts_by_store 넘겨주면 됨)
+            discounts_by_store = filtered_discounts
+
+        if mode[2] and not mode[3]:
+            return {
+                "success": discount_result.get("success", False),
+                "response": discount_result.get("message", ""),
+                "stores": stores,
+                "reviews": reviews,
+                "discounts_by_store": discounts_by_store,
+                "mcp_results": {
+                    **mcp_results,
+                    "discounts_by_store": discounts_by_store,
+                },
+                "error": discount_result.get("error"),
+            }
+
+        # mode[3]가 True면 계속 진행 (RecommendationServer로)
+        if mode[2] and mode[3]:
             mcp_results["discount"] = {
                 "message": discount_result.get("message"),
                 "discounts_by_store": discounts_by_store,
                 "raw": discount_result.get("raw_response"),
             }
+        
         
         # 4. RecommendationServer (할인율 순, 거리 순 등 정렬 결과 만들기)
         print(f"\n[4/6] 🎯 RecommendationServer 호출 중...")
@@ -648,8 +681,7 @@ class LLMEngine:
         ####### 아래는 RAG용 이니까 신경 X ##########
         # RAG (벡터 DB 생성 및 검색) - 스텁
         if mode[4]:
-            print(f"\n[6/6] 🔍 RAG 처리 중...")
-           
+            print(f"\n[5/6] 🔍 RAG 처리 중...")
             rag_result = self.rag_pipeline.process(
                 user_query=user_query,
                 recommendations=recommendations,
@@ -660,11 +692,11 @@ class LLMEngine:
             )
 
             discount_summary = rag_result.get("discount_summary")
-
+            
             # [4단계] OpenAI LLM 호출 (실제 구현)
-            print(f"\n🤖 OpenAI LLM 호출 중...")
+            print(f"\n[6/6] 🤖 OpenAI LLM 호출 중...")
             if self.openai_available:
-                response = await call_openai_llm(
+                llm_response = await call_openai_llm(
                     openai_client=self.openai_client,
                     user_query=user_query,
                     llm_context=rag_result["llm_context"],
@@ -672,19 +704,19 @@ class LLMEngine:
                 )
                 print(f"✅ LLM 응답 생성 완료")
             else:
-                response = rag_result.get("fallback_answer", "LLM 응답을 생성할 수 없습니다.")
-
+                llm_response = rag_result.get("fallback_answer", "LLM 응답을 생성할 수 없습니다.")
+            
             if discount_summary:
-                response = f"{response}\n\n[할인 요약]\n{discount_summary}"
+                llm_response = f"{llm_response}\n\n[할인 요약]\n{discount_summary}"
 
             print("\n" + "="*60)
             print(f"✅ 쿼리 처리 완료")
             print("="*60 + "\n")
-
+            
             return {
                 "success": True,
                 "query": user_query,
-                "response": response,
+                "llm_response": llm_response,
                 "mcp_results": mcp_results,
                 "rag_result": rag_result,
                 "discount_summary": discount_summary,
@@ -725,7 +757,7 @@ if FASTAPI_AVAILABLE:
                     "모임",
                     "혼밥",
                     "분위기"
-                    ]
+                ]
                 },
                 
             }
@@ -848,7 +880,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,1,0,0]  # location server까지 실행
+                mode=[1,1,1,1,1]  # location server까지 실행
             )
             
             if not result["success"]:
@@ -862,7 +894,7 @@ if FASTAPI_AVAILABLE:
             return RecommendResponse(
                 success=True,
                 query=request.query,
-                response=result["response"],
+                response=result["llm_response"],
                 mcp_results=result.get("mcp_results")
             )
             
