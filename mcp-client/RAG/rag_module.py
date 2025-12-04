@@ -130,7 +130,7 @@ def _score_benefit(info: Dict[str, Any]) -> float:
 
 
 def _best_benefit(all_benefits: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """혜택 리스트에서 가장 가치 있는 혜택 선택 (shape.kind 지원)."""
+    """혜택 리스트에서 가장 가치 있는 혜택 선택 (shape.kind == 할인 DB 양식 지원)."""
     best: Dict[str, Any] = {}
     best_score = -1.0
 

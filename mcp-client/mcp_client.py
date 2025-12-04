@@ -29,6 +29,10 @@ except Exception:
 
 # RAG 통합
 from RAG.rag_module import RAGPipeline
+try:
+    from RAG.rag_module_ablation import create_ablation_pipeline
+except Exception:
+    create_ablation_pipeline = None  # ablation 모듈이 없을 때를 대비
 from chat_filter_pipeline import ChatFilterPipeline
 from llm_responder import call_openai_llm
 # Location Module 통합
@@ -393,6 +397,13 @@ class RecommendationServer:
             추천 결과 (개인화, 전체할인순, 거리순)
         """
         try:
+            print("[RecommendationServer] 호출됨")
+            print("  - user_id:", user_id)
+            print("  - stores 개수:", len(stores))
+            print("  - discounts_by_store 개수:", len(discounts))
+            for s, data in list(discounts.items())[:5]:
+                print(f"    · {s}: discounts={len(data.get('discounts', []))}, matched={data.get('matched')}")
+
             recommendations = self.recommendation_engine.process_recommendations(
                 stores=stores,
                 discounts_by_store=discounts,
@@ -427,12 +438,13 @@ class RecommendationServer:
 class LLMEngine:
     """LLM 엔진 (OpenAI + RAG)"""
     
-    def __init__(self):
+    def __init__(self, ablation_variant: str = "baseline"):
         """
         초기화
         """
         self.chat_filter_pipeline = ChatFilterPipeline()  # chat.py 통합
-        self.rag_pipeline = RAGPipeline()
+        self.ablation_variant = ablation_variant or "baseline"
+        self.rag_pipeline = self._init_rag_pipeline()
         self.location_server = LocationServer()
         self.discount_server = DiscountServer()
         self.recommendation_server = RecommendationServer()
@@ -441,6 +453,14 @@ class LLMEngine:
         # OpenAI 사용 가능 여부 확인
         self.openai_available = OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_CLIENT
         self.openai_client = OPENAI_CLIENT
+
+    def _init_rag_pipeline(self) -> RAGPipeline:
+        if self.ablation_variant != "baseline" and create_ablation_pipeline:
+            try:
+                return create_ablation_pipeline(self.ablation_variant)
+            except Exception as e:
+                print(f"⚠️  ablation 파이프라인 생성 실패({self.ablation_variant}), 기본 파이프라인 사용: {e}")
+        return RAGPipeline()
 
     
     async def process_query(
@@ -564,6 +584,11 @@ class LLMEngine:
             )
         stores = location_payload.get("stores", [])
         reviews = location_payload.get("reviews", {})
+        
+        # 결과 로그 추가
+        print(f"✅ LocationServer 응답: {len(stores)}개 매장 발견")
+        if not stores:
+            print(f"⚠️  매장을 찾지 못했습니다. 소스: {location_payload.get('meta', {}).get('source')}")
         
         # stores가 문자열 리스트인지 딕셔너리 리스트인지 확인하여 stores_detail 추출
         stores_detail = None
@@ -785,7 +810,8 @@ if FASTAPI_AVAILABLE:
 
 # 전역 인스턴스
 location_server = LocationServer()
-llm_engine = LLMEngine()
+DEFAULT_ABLATION_VARIANT = os.getenv("RAG_ABLATION_VARIANT", "baseline")
+llm_engine = LLMEngine(ablation_variant=DEFAULT_ABLATION_VARIANT)
 
 # FastAPI 앱 생성
 if FASTAPI_AVAILABLE:
@@ -891,7 +917,7 @@ if FASTAPI_AVAILABLE:
                 longitude=longitude,
                 user_id=request.user_id,
                 user_profile=request.user_profile, ## user_profile 넘겨받는 부분 추가
-                mode=[1,1,1,0,0]  # location server까지 실행
+                mode=[1,1,1,1,1]  # location server까지 실행
             )
             
             if not result["success"]:
@@ -941,8 +967,19 @@ def main():
         default=8000,
         help="API 서버 포트 (기본: 8000)"
     )
+    parser.add_argument(
+        "--ablation-variant",
+        choices=["baseline", "no_rerank", "no_context"],
+        default=os.getenv("RAG_ABLATION_VARIANT", "baseline"),
+        help="RAG ablation 모드 선택 (기본: baseline)",
+    )
     
     args = parser.parse_args()
+
+    # ablation 옵션 반영 (전역 llm_engine 재생성)
+    if args.ablation_variant != DEFAULT_ABLATION_VARIANT:
+        global llm_engine
+        llm_engine = LLMEngine(ablation_variant=args.ablation_variant)
     
     if args.mode == "api":
         if not FASTAPI_AVAILABLE:
