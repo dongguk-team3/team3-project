@@ -373,13 +373,13 @@ class RecommendationServer:
     
     async def get_recommendations(
         self,
-        user_id: str,
         stores: List[str],
         discounts: Dict[str, Any],
         user_profile: Dict[str, Any] = None,
         user_latitude: Optional[float] = None,
         user_longitude: Optional[float] = None,
-        stores_detail: Optional[List[Dict[str, Any]]] = None
+        stores_detail: Optional[List[Dict[str, Any]]] = None,
+        distances: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         추천 결과 생성
@@ -392,32 +392,57 @@ class RecommendationServer:
             user_latitude: 사용자 위도 (거리 계산용)
             user_longitude: 사용자 경도 (거리 계산용)
             stores_detail: 매장 상세 정보 리스트 (좌표 포함, 거리 계산용)
+            distances: LocationServer에서 전달한 매장별 거리 정보
             
         Returns:
             추천 결과 (개인화, 전체할인순, 거리순)
         """
         try:
             print("[RecommendationServer] 호출됨")
-            print("  - user_id:", user_id)
             print("  - stores 개수:", len(stores))
-            print("  - discounts_by_store 개수:", len(discounts))
-            for s, data in list(discounts.items())[:5]:
-                print(f"    · {s}: discounts={len(data.get('discounts', []))}, matched={data.get('matched')}")
+            normalized_discounts = self.recommendation_engine._normalize_discount_payload(discounts)
+            print("  - discounts payload type:", type(discounts).__name__)
+            print("  - normalized_discounts 개수:", len(normalized_discounts))
+            debug_first_store = {}
+            for s, data in list(normalized_discounts.items())[:5]:
+                discount_count = len(data.get("discounts", [])) if isinstance(data, dict) else 0
+                matched = data.get("matched") if isinstance(data, dict) else None
+                print(f"    · {s}: discounts={discount_count}, matched={matched}")
+                if not debug_first_store and isinstance(data, dict):
+                    # 파싱 후 결과도 함께 노출 (상위 1건)
+                    parsed_list = self.recommendation_engine._extract_discounts_list(data)
+                    normalized_list = [self.recommendation_engine._normalize_discount(d) for d in parsed_list]
+                    debug_first_store = {
+                        "store": s,
+                        "raw_discounts_count": len(parsed_list),
+                        "first_raw_discount": parsed_list[0] if parsed_list else None,
+                        "first_normalized_discount": normalized_list[0] if normalized_list else None,
+                    }
 
             recommendations = self.recommendation_engine.process_recommendations(
                 stores=stores,
-                discounts_by_store=discounts,
+                discounts_by_store=normalized_discounts,
                 user_profile=user_profile or {},
                 user_latitude=user_latitude,
                 user_longitude=user_longitude,
-                stores_detail=stores_detail
+                stores_detail=stores_detail,
+                distances=distances,
             )
             
             return {
                 "success": True,
                 "message": "추천 계산 완료",
                 "recommendations": recommendations,
-                "user_id": user_id
+                "debug": {
+                    "discounts_payload_type": type(discounts).__name__,
+                    "normalized_type": type(normalized_discounts).__name__,
+                    "normalized_keys": list(normalized_discounts.keys())[:5],
+                    "sample_discount_entry": {
+                        k: (v.get("discounts") if isinstance(v, dict) else v)
+                        for k, v in list(normalized_discounts.items())[:1]
+                    },
+                    "parsed_sample": debug_first_store,
+                },
             }
             
         except Exception as e:
@@ -584,6 +609,7 @@ class LLMEngine:
             )
         stores = location_payload.get("stores", [])
         reviews = location_payload.get("reviews", {})
+        distances = location_payload.get("distances", {})
         
         # 결과 로그 추가
         print(f"✅ LocationServer 응답: {len(stores)}개 매장 발견")
@@ -672,18 +698,21 @@ class LLMEngine:
                 "raw": discount_result.get("raw_response"),
             }
         
+   
         
         # 4. RecommendationServer (할인율 순, 거리 순 등 정렬 결과 만들기)
         print(f"\n[4/6] 🎯 RecommendationServer 호출 중...")
-        if mode[3] and not mode[4]:
+        recommendations: Dict[str, Any] = {}
+        
+        
+        if mode[3]:
             recommendation_result = await self.recommendation_server.get_recommendations(
-                user_id=user_id,
                 stores=stores,
                 discounts=discounts_by_store,
                 user_profile=user_profile,
                 user_latitude=latitude,
                 user_longitude=longitude,
-                stores_detail=mcp_results.get("stores_detail")
+                distances=distances,
             )
             recommendations = recommendation_result.get("recommendations", {})
             
@@ -703,15 +732,9 @@ class LLMEngine:
                     "error": recommendation_result.get("error"),
                 }
             
-            # RAG 단계로 넘어갈 때 recommendations 전달
             mcp_results["recommendations"] = recommendations                
             ### not mode[4] 이라는 소리는 RAG까지의 넘어갈 필요가 없다는 것이므로 여기서 종료.
 
-        
-        
-        ## recomendation server의 output
-        recommendations = recommendations
-        
         
         
         ####### 아래는 RAG용 이니까 신경 X ##########
@@ -721,7 +744,7 @@ class LLMEngine:
             rag_result = self.rag_pipeline.process(
                 user_query=user_query,
                 recommendations=recommendations,
-                top_k=3,
+                top_k=10,
                 session_id=user_id,
                 user_profile=user_profile,
                 reviews=reviews

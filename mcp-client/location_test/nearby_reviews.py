@@ -328,12 +328,14 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
 
         for place in selected:
             pid = str(place["id"])
+            distance = place.get("distance", 0.0)
             reviews = fetch_reviews_for_place(page, pid, reviews_per_place)
 
             results.append(
                 {
                     "place": place,
                     "reviews": reviews,
+                    "distance": distance,
                 }
             )
 
@@ -343,6 +345,7 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
     # 결과를 새로운 형식으로 변환
     stores = []
     reviews_dict = {}
+    distance_dict = {}
     
     for item in results:
         place_name = item["place"].get("name", "")
@@ -356,10 +359,14 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
             ]
             if review_texts:
                 reviews_dict[place_name] = review_texts
+
+            distance_dict[place_name] = round(item.get("distance", 0.0), 3)
     
+        
     output = {
         "stores": stores,
-        "reviews": reviews_dict
+        "reviews": reviews_dict,
+        "distances": distance_dict,
     }
     
     with open(out, "w", encoding="utf-8") as f:

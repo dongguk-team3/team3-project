@@ -73,10 +73,47 @@ def _clean_number(value: Any) -> Optional[float]:
         return None
 
 
+def _parse_object_string_like(value: Any) -> Any:
+    """DiscountServer의 '@{...}' 형태 문자열을 dict로 단순 파싱한다."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not (text.startswith("@{") and text.endswith("}")):
+        return value
+    inner = text[2:-1].strip()
+    if not inner:
+        return {}
+    parsed: Dict[str, Any] = {}
+    for part in inner.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, raw = part.split("=", 1)
+        k = k.strip()
+        raw = raw.strip()
+        if raw in ("", None):
+            val: Any = None
+        elif raw == "System.Object[]":
+            val = []
+        elif raw.lower() in {"true", "false"}:
+            val = raw.lower() == "true"
+        else:
+            num = _clean_number(raw)
+            val = num if num is not None else raw
+        parsed[k] = val
+    return parsed
+
+
 def _extract_benefit_info(benefit: Dict[str, Any]) -> Dict[str, Any]:
     """shape.kind 기반으로 혜택 정보를 정규화."""
-    shape = benefit.get("shape") or {}
-    unit_rule = shape.get("unitRule") or {}
+    shape_raw = benefit.get("shape") or {}
+    if isinstance(shape_raw, str):
+        shape_raw = _parse_object_string_like(shape_raw)
+    shape = shape_raw if isinstance(shape_raw, dict) else {}
+    unit_rule_raw = shape.get("unitRule") or shape.get("unit_rule") or {}
+    if isinstance(unit_rule_raw, str):
+        unit_rule_raw = _parse_object_string_like(unit_rule_raw)
+    unit_rule = unit_rule_raw if isinstance(unit_rule_raw, dict) else {}
     kind = shape.get("kind") or benefit.get("type") or benefit.get("providerType")
 
     name = benefit.get("discountName") or benefit.get("benefit_id") or benefit.get("description")
@@ -226,8 +263,8 @@ def _normalize_recommendations_for_rag(
         if isinstance(block, dict):
             if block.get("store_list"):
                 return block["store_list"]
-            # 중첩된 경우 우선순위: by_total_discount → by_distance → personalized
-            for key in ("by_total_discount", "by_distance", "personalized"):
+            # 중첩된 경우 우선순위: by_distance → personalized
+            for key in ("by_distance", "personalized"):
                 if isinstance(block.get(key), dict) and block[key].get("store_list"):
                     return block[key]["store_list"]
         return []
@@ -323,6 +360,14 @@ class VectorDBManager:
     ) -> Dict[str, Any]:
         sid = _sanitize_session_id(session_id)
         documents = self._build_documents(recommendations, reviews, sid)
+        if not documents:
+            return {
+                "message": "⚠️ RAG 문서를 생성할 데이터가 없습니다.",
+                "session_id": sid,
+                "total_documents": 0,
+                "backend": "chroma",
+                "skipped": True,
+            }
         if not self._chroma_client:
             raise RuntimeError("Chroma 클라이언트를 초기화하지 못했습니다. chromadb 설치를 확인하세요.")
         self._upsert_chroma(sid, documents)
@@ -741,8 +786,10 @@ class VectorDBManager:
         distance_rank = meta.get("distance_rank")
         if isinstance(discount_rank, (int, float)) and discount_rank > 0:
             score += 0.1 / discount_rank
+            print(f"할인 순위 기반 보너스 추가: {0.1 / discount_rank}\n")
         if isinstance(distance_rank, (int, float)) and distance_rank > 0:
             score += 0.05 / distance_rank
+            print(f"거리 순위 기반 보너스 추가: {0.05 / distance_rank}\n")
 
         # 할인 혜택 존재 여부 + 강도 반영
         rate = meta.get("best_discount_rate")
@@ -751,12 +798,16 @@ class VectorDBManager:
         unit_amt = meta.get("best_discount_unit_amount")
         if meta.get("best_discount_name"):
             score += 0.03
+            print("할인 혜택 존재로 기본 보너스 0.03 추가.\n")
         if isinstance(rate, (int, float)):
             score += min(rate * 0.05, 0.15)
+            print(f"할인율 기반 보너스 추가: {min(rate * 0.05, 0.15)}\n")
         elif isinstance(amount, (int, float)):
             score += min(amount / 150000, 0.15)
+            print(f"할인액 기반 보너스 추가: {min(amount / 150000, 0.15)}\n")
         if isinstance(per_unit, (int, float)) and isinstance(unit_amt, (int, float)):
             score += 0.04
+            print("단위 할인 기반 보너스 추가: 0.04\n")
 
         # 사용자 프로필과 혜택 매칭 (통신사/카드/멤버십 포함)
         if user_profile:
@@ -771,6 +822,7 @@ class VectorDBManager:
             benefit_name = str(meta.get("best_discount_name") or "").lower()
             if benefit_name and any(tok in benefit_name for tok in tokens):
                 score += 0.04
+                print("사용자 프로필과 혜택 매칭으로 보너스 0.04 추가.\n")
 
         # 선호 카테고리와 리뷰 매칭 가중치 (임베딩 기반 보너스)
         if user_categories:
