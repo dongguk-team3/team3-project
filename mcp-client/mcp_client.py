@@ -479,13 +479,17 @@ class LLMEngine:
         self.openai_available = OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_CLIENT
         self.openai_client = OPENAI_CLIENT
 
-    def _init_rag_pipeline(self) -> RAGPipeline:
-        if self.ablation_variant != "baseline" and create_ablation_pipeline:
-            try:
-                return create_ablation_pipeline(self.ablation_variant)
-            except Exception as e:
-                print(f"⚠️  ablation 파이프라인 생성 실패({self.ablation_variant}), 기본 파이프라인 사용: {e}")
-        return RAGPipeline()
+    def _init_rag_pipeline(self) -> Optional[RAGPipeline]:
+        try:
+            if self.ablation_variant != "baseline" and create_ablation_pipeline:
+                try:
+                    return create_ablation_pipeline(self.ablation_variant)
+                except Exception as e:
+                    print(f"⚠️  ablation 파이프라인 생성 실패({self.ablation_variant}), 기본 파이프라인 사용: {e}")
+            return RAGPipeline()
+        except Exception as e:
+            print(f"⚠️  RAG 파이프라인 초기화 실패 (ChromaDB 문제일 수 있음), RAG 기능 비활성화: {e}")
+            return None
 
     
     async def process_query(
@@ -610,6 +614,8 @@ class LLMEngine:
         stores = location_payload.get("stores", [])
         reviews = location_payload.get("reviews", {})
         distances = location_payload.get("distances", {})
+        locations = location_payload.get("locations", {})
+        
         
         # 결과 로그 추가
         print(f"✅ LocationServer 응답: {len(stores)}개 매장 발견")
@@ -779,6 +785,7 @@ class LLMEngine:
                 "mcp_results": mcp_results,
                 "rag_result": rag_result,
                 "discount_summary": discount_summary,
+                "locations": locations
             }
         
     

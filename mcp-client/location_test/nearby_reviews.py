@@ -329,13 +329,17 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
         for place in selected:
             pid = str(place["id"])
             distance = place.get("distance", 0.0)
+            latitude = place.get("y")
+            longitude = place.get("x")
             reviews = fetch_reviews_for_place(page, pid, reviews_per_place)
-
+     
             results.append(
                 {
                     "place": place,
                     "reviews": reviews,
                     "distance": distance,
+                    "latitude": latitude,
+                    "longitude": longitude,
                 }
             )
 
@@ -346,6 +350,8 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
     stores = []
     reviews_dict = {}
     distance_dict = {}
+    location_dict = {}
+    
     
     for item in results:
         place_name = item["place"].get("name", "")
@@ -361,12 +367,13 @@ def main(location: Optional[Tuple[float, float]] = None, place_type: Optional[st
                 reviews_dict[place_name] = review_texts
 
             distance_dict[place_name] = round(item.get("distance", 0.0), 3)
-    
+            location_dict[place_name] = {"latitude": round(float(item.get("latitude", 0.0)), 4), "longitude": round(float(item.get("longitude", 0.0)), 4)}  
         
     output = {
         "stores": stores,
         "reviews": reviews_dict,
         "distances": distance_dict,
+        "locations": location_dict,
     }
     
     with open(out, "w", encoding="utf-8") as f:

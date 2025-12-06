@@ -151,6 +151,7 @@ class LocationModule:
         stores = dataset.get("stores", [])
         reviews = dataset.get("reviews", {})
         distances = dataset.get("distances", {})
+        locations = dataset.get("locations", {})
 
         if not stores:
             return {
@@ -179,6 +180,7 @@ class LocationModule:
             "stores": stores,
             "reviews": normalized_reviews,
             "distances": distances,
+            "locations": locations,
             "meta": {
                 "source": dataset.get("meta", {}).get("source", self._nearby_reviews_source),
                 "place_type": place_type,
@@ -321,6 +323,7 @@ class LocationModule:
                 "stores": data.get("stores", []),
                 "reviews": data.get("reviews", {}),
                 "distances": data.get("distances", {}),
+                "locations": data.get("locations", {}),
                 "meta": {
                     "source": f"{script} (generated)",
                     "stdout": result.stdout.strip(),
