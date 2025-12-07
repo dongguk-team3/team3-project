@@ -169,5 +169,7 @@ if __name__ == "__main__":
     async def _test():
         result = await fetch_lguplus_membership_for_targets()
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        with open("lguplus_brands.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
 
     asyncio.run(_test())

@@ -193,10 +193,13 @@ async def fetch_cjone_partners(cat_cd: int = 2) -> List[Dict[str, Any]]:
 
     return result
 
-
+import os
 async def main():
     data = await fetch_cjone_partners()
+    print("현재 작업 경로:", os.getcwd())   # ← 추가
     print(json.dumps(data, ensure_ascii=False, indent=2))
+    with open("cjone_brands.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

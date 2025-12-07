@@ -12,10 +12,11 @@
 import asyncio
 import aiohttp
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+import os
 import random
- 
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,6 @@ class ReviewCrawler:
         """
         self.use_mock = use_mock
         self.headless = headless
-        
-        if not use_mock:
-            logger.warning("⚠️ 실제 크롤링 모드는 법적 문제가 있을 수 있습니다!")
-            logger.warning("⚠️ 개인 학습/연구 목적으로만 사용하세요.")
     
     async def crawl_kakao_reviews(
         self, 
@@ -180,20 +177,28 @@ class ReviewCrawler:
 
 class NaverPlaceAPIClient:
     """
-    네이버 플레이스 검색 API 클라이언트 (공식 API 사용)
+    네이버 공식 지역 검색 Open API를 이용한 장소 검색
     
-    이것이 권장되는 방법입니다!
+    네이버 개발자 센터에서 발급받은 API 키가 필요합니다.
     """
     
-    def __init__(self, client_id: str, client_secret: str):
+    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None):
         """
         Args:
-            client_id: 네이버 API 클라이언트 ID
-            client_secret: 네이버 API 클라이언트 시크릿
+            client_id: 네이버 검색 API Client ID
+            client_secret: 네이버 검색 API Client Secret
         """
+        if not client_id or not client_secret:
+            raise ValueError("네이버 검색 API Client ID와 Client Secret이 필요합니다.")
+        
         self.client_id = client_id
         self.client_secret = client_secret
         self.api_url = "https://openapi.naver.com/v1/search/local.json"
+        self.headers = {
+            "X-Naver-Client-Id": self.client_id,
+            "X-Naver-Client-Secret": self.client_secret,
+            "Accept": "application/json",
+        }
     
     async def search_place(
         self, 
@@ -203,54 +208,76 @@ class NaverPlaceAPIClient:
         lng: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """
-        네이버 지역 검색 API로 장소 검색 (좌표 활용 가능)
+        네이버 공식 지역 검색 Open API로 장소 검색
         
         Args:
             query: 검색 쿼리
-            display: 검색 결과 개수 (최대 5)
-            lat: 위도 (선택사항, 좌표 기반 검색 시 사용)
-            lng: 경도 (선택사항, 좌표 기반 검색 시 사용)
+            display: 검색 결과 개수 (기본 5, 최대 100)
+            lat: 위도 (선택사항, 현재는 사용 안함 - query에 지역명 포함 권장)
+            lng: 경도 (선택사항, 현재는 사용 안함 - query에 지역명 포함 권장)
         
         Returns:
             검색 결과 리스트
         """
-        
-        headers = {
-            "X-Naver-Client-Id": self.client_id,
-            "X-Naver-Client-Secret": self.client_secret
-        }
+        # display 값 검증 (최대 100)
+        display = min(max(1, display), 100)
         
         params = {
             "query": query,
-            "display": min(display, 5)
+            "display": display,
+            "start": 1,
+            "sort": "random",  # random, comment 등
         }
         
-        # 좌표가 제공되면 검색 범위 지정 (네이버 API는 좌표 기반 검색 지원)
         if lat is not None and lng is not None:
-            # 네이버 지역 검색 API는 좌표를 직접 파라미터로 받지 않지만,
-            # 검색 쿼리에 지역 정보가 포함되어 있으면 해당 지역 중심으로 검색됨
-            # 좌표 정보는 로깅용으로만 사용
-            logger.info(f"📍 좌표 기반 검색: ({lat}, {lng})")
+            logger.info(f"📍 검색 (공식 API): {query} @ ({lat}, {lng})")
+        else:
+            logger.info(f"🔍 검색 (공식 API): {query}")
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    self.api_url,
-                    headers=headers,
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        items = data.get("items", [])
-                        logger.info(f"✅ 네이버 검색 성공: '{query}' -> {len(items)}개 결과")
-                        return items
-                    else:
-                        text = await response.text()
-                        logger.error(f"❌ API 호출 실패 ({response.status}): {text}")
+                async with session.get(self.api_url, headers=self.headers, params=params) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"❌ API 호출 실패 ({response.status}): {error_text}")
                         return []
+                    
+                    data = await response.json()
+                    
+                    # 공식 API 응답 파싱
+                    items = data.get("items", [])
+                    
+                    if not items:
+                        logger.warning(f"⚠️ 검색 결과가 없습니다: {query}")
+                        return []
+                    
+                    # 공식 API 응답 형식 그대로 사용 (이미 표준 형식)
+                    result_items = []
+                    for item in items:
+                        # HTML 태그 제거
+                        title = item.get("title", "").replace("<b>", "").replace("</b>", "")
+                        link = item.get("link", "")
+                        
+                        result_item = {
+                            "title": title,
+                            "link": link,
+                            "category": item.get("category", ""),
+                            "description": item.get("description", ""),
+                            "telephone": item.get("telephone", ""),
+                            "address": item.get("address", ""),
+                            "roadAddress": item.get("roadAddress", ""),
+                            "mapx": item.get("mapx", ""),
+                            "mapy": item.get("mapy", ""),
+                        }
+                        result_items.append(result_item)
+                    
+                    logger.info(f"✅ 검색 결과 {len(result_items)}개 반환: {query}")
+                    return result_items
         
         except Exception as e:
             logger.error(f"❌ 오류 발생: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
 
@@ -420,22 +447,23 @@ async def example_usage():
         print(f"\n[{idx}] {review['author']} (⭐{review['rating']})")
         print(f"    {review['content']}")
     
-    # 네이버 공식 API 사용 (권장)
-    print("\n\n2. 네이버 공식 API 사용 (권장)")
-    print("⚠️ 네이버 개발자 센터에서 API 키를 발급받으세요:")
-    print("   https://developers.naver.com/")
+    # 네이버 공식 API 사용
+    print("\n\n2. 네이버 공식 지역 검색 API 사용")
+    from location_server_config import NAVER_SEARCH_CLIENT_ID, NAVER_SEARCH_CLIENT_SECRET
     
-    # API 키가 있다면:
-    # naver_client = NaverPlaceAPIClient(
-    #     client_id="your_client_id",
-    #     client_secret="your_client_secret"
-    # )
-    # results = await naver_client.search_place("강남역 맛집", display=5)
-    # print(f"검색 결과: {len(results)}개")
+    if NAVER_SEARCH_CLIENT_ID and NAVER_SEARCH_CLIENT_SECRET:
+        naver_client = NaverPlaceAPIClient(
+            client_id=NAVER_SEARCH_CLIENT_ID,
+            client_secret=NAVER_SEARCH_CLIENT_SECRET
+        )
+        results = await naver_client.search_place("강남역 맛집", display=3)
+        print(f"검색 결과: {len(results)}개")
+        
+        for idx, item in enumerate(results, 1):
+            print(f"\n[{idx}] {item['title']}")
+            print(f"    주소: {item['roadAddress']}")
+            print(f"    카테고리: {item['category']}")
 
 
 if __name__ == "__main__":
     asyncio.run(example_usage())
-
-
-

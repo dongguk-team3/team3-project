@@ -1,6 +1,15 @@
+mcp-client/RAG/langchain-kr-main/
 # 환경 변수 파일 (API 키 포함)
 .env
+mcp-client/**/.env
+mcp-server/**/.env
 mcp-client/OPENAI_API.txt
+GITHUB_TOKEN.txt
+mcp-client/data/
+mcp-client/nohup.out
+mcp-client/server.log
+mcp-server/Location_server/location_server_config.py
+mcp-server/Location_server/query_results.json
 
 # Python 캐시
 __pycache__/
@@ -26,3 +35,17 @@ venv/
 env/
 ENV/
 
+mcp-client/UseCase.pdf
+
+# db
+*.bin
+*.sqlite3
+mcp-client/RAG/.chroma_db
+
+# 기타
+*.gradle
+*.bat
+/app
+/.gradle
+/dist
+*.sh

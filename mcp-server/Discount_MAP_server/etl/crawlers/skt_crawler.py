@@ -211,3 +211,5 @@ if __name__ == "__main__":
     import json
     data = asyncio.run(fetch_skt_eat_benefits())
     print(json.dumps(data, ensure_ascii=False, indent=2))
+    with open("skt_brands.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)

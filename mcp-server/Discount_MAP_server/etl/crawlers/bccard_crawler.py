@@ -252,6 +252,10 @@ def fetch_bliss7_vip_services_sync(
 
 if __name__ == "__main__":
     import json
+    import os
 
     data = fetch_bliss7_vip_services_sync()
+    print("현재 작업 경로:", os.getcwd())   # ← 추가
     print(json.dumps(data, ensure_ascii=False, indent=2))
+    with open("bccard_brands.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)

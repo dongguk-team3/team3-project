@@ -118,6 +118,8 @@ def _extract_benefit_info(benefit: Dict[str, Any]) -> Dict[str, Any]:
 
     name = benefit.get("discountName") or benefit.get("benefit_id") or benefit.get("description")
     provider = benefit.get("providerName")
+    applied = bool(benefit.get("appliedByUserProfile") or benefit.get("applied"))
+    is_discount = benefit.get("isDiscount")
 
     rate = _clean_number(shape.get("amount")) if kind == "PERCENT" else _clean_number(benefit.get("discount_rate"))
     if rate is None and kind == "PERCENT":
@@ -149,6 +151,8 @@ def _extract_benefit_info(benefit: Dict[str, Any]) -> Dict[str, Any]:
         "max_amount": max_amount,
         "description": benefit.get("description") or name or "",
         "provider_type": benefit.get("providerType") or benefit.get("type"),
+        "applied": applied,
+        "is_discount": is_discount,
     }
 
 
@@ -168,10 +172,16 @@ def _score_benefit(info: Dict[str, Any]) -> float:
 
 def _best_benefit(all_benefits: List[Dict[str, Any]]) -> Dict[str, Any]:
     """혜택 리스트에서 가장 가치 있는 혜택 선택 (shape.kind == 할인 DB 양식 지원)."""
+    # 사용자 프로필에 적용 가능한 혜택만 대상으로 삼는다
+    benefits = [
+        b
+        for b in (all_benefits or [])
+        if not (b.get("appliedByUserProfile") is False or b.get("applied") is False)
+    ]
     best: Dict[str, Any] = {}
     best_score = -1.0
 
-    for benefit in all_benefits or []:
+    for benefit in benefits:
         info = _extract_benefit_info(benefit)
         score = _score_benefit(info)
         if score > best_score:
@@ -180,8 +190,8 @@ def _best_benefit(all_benefits: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     if best:
         return best
-    if all_benefits:
-        return _extract_benefit_info(all_benefits[0])
+    if benefits:
+        return _extract_benefit_info(benefits[0])
     return {}
 
 
@@ -263,14 +273,24 @@ def _normalize_recommendations_for_rag(
         if isinstance(block, dict):
             if block.get("store_list"):
                 return block["store_list"]
-            # 중첩된 경우 우선순위: by_distance → personalized
-            for key in ("by_distance", "personalized"):
+            # 중첩된 경우 우선순위: personalized → by_total_discount → by_distance
+            for key in ("personalized", "by_total_discount", "by_distance"):
                 if isinstance(block.get(key), dict) and block[key].get("store_list"):
                     return block[key]["store_list"]
         return []
 
     by_discount_list = ensure_store_list(recos.get("by_discount"))
     by_distance_list = ensure_store_list(recos.get("by_distance"))
+
+    # personalized 밖의 혜택이 있는 거리 리스트를 할인 리스트로 보강
+    if by_distance_list and by_discount_list:
+        seen = {s.get("name") for s in by_discount_list}
+        for item in by_distance_list:
+            benefits = item.get("all_benefits") or []
+            name = item.get("name")
+            if benefits and name and name not in seen:
+                by_discount_list.append(item)
+                seen.add(name)
 
     # 둘 다 비어 있으면 fallback: Location stores로 최소 구조 생성
     if not by_discount_list and not by_distance_list:
@@ -310,6 +330,26 @@ def _normalize_recommendations_for_rag(
         recos["by_distance"] = {"store_list": by_distance_list}
 
     return recos, reviews or {}
+
+
+def _collect_benefit_map(rec_obj: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """recommendations 전역을 훑어 매장별 all_benefits 맵을 만든다."""
+    benefit_map: Dict[str, List[Dict[str, Any]]] = {}
+
+    def walk(node: Any):
+        if isinstance(node, dict):
+            name = node.get("name") or node.get("store_id") or node.get("id")
+            benefits = node.get("all_benefits")
+            if name and isinstance(benefits, list) and benefits:
+                benefit_map[str(name)] = benefits
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(rec_obj)
+    return benefit_map
 
 
 @dataclass
@@ -385,7 +425,7 @@ class VectorDBManager:
         reviews: Dict[str, Any],
         session_id: str,
     ) -> List[Document]:
-        candidates, rank_map = self._collect_candidates(recommendations)
+        candidates, rank_map, benefit_map = self._collect_candidates(recommendations)
         documents: List[Document] = []
 
         used_ids: set[str] = set()
@@ -395,7 +435,8 @@ class VectorDBManager:
             used_ids.add(store_key)
 
             rank_info = rank_map.get(store_key, {})
-            best_benefit = _best_benefit(store.get("all_benefits") or [])
+            all_benefits = store.get("all_benefits") or benefit_map.get(store_key) or []
+            best_benefit = _best_benefit(all_benefits)
             review_text = _review_snippet(store_key, store.get("name", ""), reviews)
 
             doc_text = self._compose_store_text(store, rank_info, best_benefit, review_text)
@@ -413,8 +454,10 @@ class VectorDBManager:
         for store in review_only_stores:
             store_key = store["store_name"]
             review_text = _review_snippet(store_key, store.get("name", ""), reviews)
-            doc_text = self._compose_store_text(store, {}, {}, review_text)
-            meta = self._build_metadata(store, {}, {}, review_text)
+            all_benefits = benefit_map.get(store_key) or []
+            best_benefit = _best_benefit(all_benefits)
+            doc_text = self._compose_store_text(store, {}, best_benefit, review_text)
+            meta = self._build_metadata(store, {}, best_benefit, review_text)
 
             documents.append(
                 Document(
@@ -428,8 +471,9 @@ class VectorDBManager:
 
     def _collect_candidates(
         self, recommendations: Dict[str, Any]
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
         bucketed: Dict[str, List[Dict[str, Any]]] = {}
+        benefit_map: Dict[str, List[Dict[str, Any]]] = _collect_benefit_map(recommendations)
         for bucket in ["by_discount", "by_distance"]:
             payload = recommendations.get(bucket) or {}
             store_list = payload.get("store_list") or payload or []
@@ -455,12 +499,8 @@ class VectorDBManager:
                     continue
                 merged.append(store)
                 seen_ids.add(store_key)
-                if len(merged) >= 6:
-                    break
-            if len(merged) >= 6:
-                break
 
-        return merged, rank_map
+        return merged, rank_map, benefit_map
 
     def _sort_store_list(self, stores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not isinstance(stores, list):
@@ -555,6 +595,10 @@ class VectorDBManager:
         best_benefit: Dict[str, Any],
         review_text: str,
     ) -> Dict[str, Any]:
+        # all_benefits가 있는데 best_benefit이 비어 있으면 한 번 더 보완
+        if (not best_benefit) and store.get("all_benefits"):
+            best_benefit = _best_benefit(store.get("all_benefits") or [])
+
         meta = {
             "source_type": "store",
             "store_name": store.get("name"),
@@ -698,13 +742,13 @@ class VectorDBManager:
 
         naive_cosine_score= self._naive_cosine_similarity_score(query_text, review_text)
         if naive_cosine_score >= 0.85:
-            return 0.3, naive_cosine_score
+            return 0.05, naive_cosine_score
         if naive_cosine_score >= 0.80:
-            return 0.25, naive_cosine_score
+            return 0.04, naive_cosine_score
         if naive_cosine_score >= 0.75:
-            return 0.2, naive_cosine_score
+            return 0.03, naive_cosine_score
         if naive_cosine_score >= 0.7:
-            return 0.15, naive_cosine_score
+            return 0.02, naive_cosine_score
         return 0.0, naive_cosine_score
 
     def _category_relevance_bonus(self, categories: List[str], review_text: Optional[str]) -> float:
@@ -785,11 +829,11 @@ class VectorDBManager:
         discount_rank = meta.get("discount_rank")
         distance_rank = meta.get("distance_rank")
         if isinstance(discount_rank, (int, float)) and discount_rank > 0:
-            score += 0.1 / discount_rank
-            print(f"할인 순위 기반 보너스 추가: {0.1 / discount_rank}\n")
+            score += 0.2 / discount_rank
+            print(f"할인 순위 기반 보너스 추가: {0.2 / discount_rank}\n")
         if isinstance(distance_rank, (int, float)) and distance_rank > 0:
-            score += 0.05 / distance_rank
-            print(f"거리 순위 기반 보너스 추가: {0.05 / distance_rank}\n")
+            score += 0.1 / distance_rank
+            print(f"거리 순위 기반 보너스 추가: {0.1 / distance_rank}\n")
 
         # 할인 혜택 존재 여부 + 강도 반영
         rate = meta.get("best_discount_rate")
@@ -797,8 +841,8 @@ class VectorDBManager:
         per_unit = meta.get("best_discount_per_unit")
         unit_amt = meta.get("best_discount_unit_amount")
         if meta.get("best_discount_name"):
-            score += 0.03
-            print("할인 혜택 존재로 기본 보너스 0.03 추가.\n")
+            score += 0.05
+            print("할인 혜택 존재로 기본 보너스 0.05 추가.\n")
         if isinstance(rate, (int, float)):
             score += min(rate * 0.05, 0.15)
             print(f"할인율 기반 보너스 추가: {min(rate * 0.05, 0.15)}\n")
@@ -828,11 +872,13 @@ class VectorDBManager:
         if user_categories:
             cat_bonus = self._category_relevance_bonus(user_categories, meta.get("review_text"))
             score += cat_bonus
+            print(f"선호 카테고리-리뷰 매칭 보너스 추가 점수: {cat_bonus}\n")
 
         # LLM 임베딩 + 생성 모델 기반 리뷰 관련성 보너스 (임계치 방식)
         review_bonus, llm_review_score = self._review_relevance_bonus(
             meta.get("query_text"), meta.get("review_text")
         )
+        print(f"가게 이름, LLM 리뷰 관련성 보너스 추가 점수: {meta.get('store_name')} ,{review_bonus}\n")
         score += review_bonus
         meta["llm_review_score"] = llm_review_score
         
@@ -840,37 +886,48 @@ class VectorDBManager:
         return max(score, 0.0)
 
     def _apply_diversity_gate(self, results: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
-        """상위 K에 리뷰 기반 후보가 최소 1개 포함되도록 보장."""
+        """상위 K에 리뷰-only 1개, 할인 혜택 1개를 보장."""
         if not results:
             return results
-        top_slice = results[:top_k]
-        # 이미 할인 없는 리뷰-only 후보가 있으면 그대로 반환
-        if any(
-            (r.get("metadata") or {}).get("review_text")
-            and not (r.get("metadata") or {}).get("best_discount_name")
-            for r in top_slice
-        ):
-            return results
 
-        # 리뷰만 있고 할인 정보가 없는 후보를 찾아 올린다
-        review_candidates = [
-            r
-            for r in results
-            if (r.get("metadata") or {}).get("review_text") and not (r.get("metadata") or {}).get("best_discount_name")
-        ]
-        if not review_candidates:
-            return results
+        def rid(rec: Dict[str, Any]) -> str:
+            return str(rec.get("doc_id") or id(rec))
 
-        best_review = review_candidates[0]
-        if best_review in top_slice:
-            return results
+        def is_review_only(rec: Dict[str, Any]) -> bool:
+            meta = rec.get("metadata") or {}
+            return bool(meta.get("review_text")) and not meta.get("best_discount_name")
 
-        # top_k 안에 리뷰 후보를 끼워 넣은 뒤 top_k 구간은 점수로 재정렬
-        remaining = [r for r in results if r is not best_review]
-        promoted = remaining[: max(top_k - 1, 0)] + [best_review]
-        promoted.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-        tail = remaining[max(top_k - 1, 0) :]
-        return promoted + tail
+        def has_discount(rec: Dict[str, Any]) -> bool:
+            meta = rec.get("metadata") or {}
+            return bool(meta.get("best_discount_name"))
+
+        review_candidate = next((r for r in results if is_review_only(r)), None)
+        discount_candidate = next((r for r in results if has_discount(r)), None)
+
+        # 필수 후보를 우선 배치
+        chosen: List[Dict[str, Any]] = []
+        added: set[str] = set()
+        for cand in (review_candidate, discount_candidate):
+            if cand and rid(cand) not in added:
+                chosen.append(cand)
+                added.add(rid(cand))
+
+        # 나머지는 점수 순으로 채우되 중복 제거
+        rest = sorted(results, key=lambda x: x.get("score", 0.0), reverse=True)
+        for rec in rest:
+            if len(chosen) >= top_k:
+                break
+            if rid(rec) in added:
+                continue
+            chosen.append(rec)
+            added.add(rid(rec))
+
+        # 최종 top_k는 score 기준으로 정렬
+        chosen = sorted(chosen, key=lambda x: x.get("score", 0.0), reverse=True)[:top_k]
+
+        top_ids = {rid(r) for r in chosen}
+        tail = [r for r in results if rid(r) not in top_ids]
+        return chosen + tail
 
     # ----------------------- 정리 -----------------------
     def clear_session(self, session_id: str):

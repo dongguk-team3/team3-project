@@ -12,12 +12,18 @@ from mcp.types import Tool, TextContent
 import aiohttp
 import json
 
-# location_server_config.py에서 카카오맵 설정 로드
+# location_server_config.py에서 네이버 설정 로드
 from location_server_config import (
-    KAKAO_REST_API_KEY,
-    KAKAO_LOCAL_SEARCH_URL,
-    KAKAO_CATEGORY_SEARCH_URL,
-    validate_api_keys
+    NAVER_SEARCH_CLIENT_ID,
+    NAVER_SEARCH_CLIENT_SECRET,
+)
+
+# query_to_naver.py에서 네이버 API 클라이언트 로드
+from query_to_naver import (
+    NaverPlaceAPIClient,
+    QueryIntent,
+    search_places,
+    geocode_location,
 )
 
 # review_generator.py에서 리뷰 생성기 로드
@@ -114,13 +120,13 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """도구 실행"""
     
-    # API 키 확인
-    if not KAKAO_REST_API_KEY:
+    # 네이버 API 키 확인
+    if not (NAVER_SEARCH_CLIENT_ID and NAVER_SEARCH_CLIENT_SECRET):
         return [TextContent(
             type="text",
             text=json.dumps({
-                "error": "❌ KAKAO_REST_API_KEY가 설정되지 않았습니다.",
-                "message": "config.py에서 API 키를 설정하세요."
+                "error": "❌ NAVER_SEARCH_CLIENT_ID/SECRET가 설정되지 않았습니다.",
+                "message": "location_server_config.py에서 API 키를 설정하세요."
             }, ensure_ascii=False, indent=2)
         )]
     
@@ -129,72 +135,50 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         lon = arguments.get("longitude")
         category = arguments.get("category", "음식점")
         
-        # 카카오맵 API 호출
+        # 네이버 API를 사용하여 주변 매장 검색
         try:
+            # 네이버 클라이언트 생성
+            naver_client = NaverPlaceAPIClient(
+                client_id=NAVER_SEARCH_CLIENT_ID,
+                client_secret=NAVER_SEARCH_CLIENT_SECRET,
+            )
+            
+            # QueryIntent 생성
+            intent = QueryIntent(
+                original_query=f"{category} 검색",
+                place_type=category,
+                attributes=[],
+                location=None
+            )
+            
+            # 지오코딩 (위도/경도가 있으면 사용)
+            center = (lat, lon) if lat and lon else None
+            
+            # 네이버 API로 검색
             async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"
-                }
-                params = {
-                    "query": category,
-                    "x": lon,  # 경도
-                    "y": lat,  # 위도
-                    "radius": 1000,  # 1km 반경
-                    "size": 15  # 최대 15개
-                }
-                
-                async with session.get(
-                    KAKAO_LOCAL_SEARCH_URL,
-                    headers=headers,
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # 디버깅: API 응답 확인
-                        import sys
-                        print(f"[DEBUG] 카카오맵 API 응답: {len(data.get('documents', []))}개 문서", file=sys.stderr)
-                        print(f"[DEBUG] Meta: {data.get('meta', {})}", file=sys.stderr)
+                result = await search_places(
+                    naver_client=naver_client,
+                    intent=intent,
+                    center=center
+                )
                         
                         # 결과 변환
-                        stores = []
-                        for doc in data.get("documents", []):
-                            stores.append({
-                                "id": doc.get("id"),
-                                "name": doc.get("place_name"),
-                                "category": doc.get("category_name"),
-                                "distance": int(doc.get("distance", 0)),
-                                "address": doc.get("address_name"),
-                                "road_address": doc.get("road_address_name"),
-                                "phone": doc.get("phone"),
-                                "place_url": doc.get("place_url"),
-                                "latitude": float(doc.get("y")),
-                                "longitude": float(doc.get("x"))
-                            })
-                        
-                        result = {
+            stores_list = result.get("stores", [])
+            
+            final_result = {
                             "query": {
                                 "latitude": lat,
                                 "longitude": lon,
                                 "category": category
                             },
-                            "total_count": data.get("meta", {}).get("total_count", 0),
-                            "stores": stores,
-                            "message": "✅ 카카오맵 API 실제 데이터"
+                "total_count": len(stores_list),
+                "stores": stores_list,
+                "message": "✅ 네이버 API로 주변 매장 검색 완료"
                         }
                         
                         return [TextContent(
                             type="text",
-                            text=json.dumps(result, ensure_ascii=False, indent=2)
-                        )]
-                    else:
-                        error_text = await response.text()
-                        return [TextContent(
-                            type="text",
-                            text=json.dumps({
-                                "error": f"❌ API 호출 실패: {response.status}",
-                                "details": error_text
-                            }, ensure_ascii=False, indent=2)
+                text=json.dumps(final_result, ensure_ascii=False, indent=2)
                         )]
                         
         except Exception as e:
@@ -213,103 +197,68 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         max_stores = arguments.get("max_stores", 10)
         reviews_per_store = arguments.get("reviews_per_store", 5)
         
-        # 1단계: 카카오맵 API로 F&B 매장 검색
+        # 네이버 API를 사용하여 F&B 매장 검색
         try:
+            # 네이버 클라이언트 생성
+            naver_client = NaverPlaceAPIClient(
+                client_id=NAVER_SEARCH_CLIENT_ID,
+                client_secret=NAVER_SEARCH_CLIENT_SECRET,
+            )
+            
+            # QueryIntent 생성
+            intent = QueryIntent(
+                original_query=f"{category} 검색",
+                place_type=category,
+                attributes=[],
+                location=None
+            )
+            
+            # 지오코딩 (위도/경도가 있으면 사용)
+            center = (lat, lon) if lat and lon else None
+            
+            # 네이버 API로 검색
             async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"
-                }
-                params = {
-                    "query": category,
-                    "x": lon,  # 경도
-                    "y": lat,  # 위도
-                    "radius": radius,
-                    "size": max_stores
-                }
-                
-                print(f"[DEBUG] 카카오맵 API 호출 중... (lat={lat}, lon={lon}, category={category})", file=sys.stderr)
-                
-                async with session.get(
-                    KAKAO_LOCAL_SEARCH_URL,
-                    headers=headers,
-                    params=params
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
+                result = await search_places(
+                    naver_client=naver_client,
+                    intent=intent,
+                    center=center
+                )
                         
-                        print(f"[DEBUG] 카카오맵 API 응답: {len(data.get('documents', []))}개 매장 발견", file=sys.stderr)
+            # nearby_reviews.py 형식으로 변환 (이미 search_places에서 변환됨)
+            stores_list = result.get("stores", [])
+            reviews_dict = result.get("reviews", {})
                         
-                        # 매장 정보 변환
-                        stores = []
-                        for doc in data.get("documents", []):
-                            # rating 필드가 없으면 3.5~4.5 사이의 랜덤 값으로 설정
-                            import random
-                            rating = round(random.uniform(3.5, 4.5), 1)
-                            
-                            stores.append({
-                                "id": doc.get("id"),
-                                "name": doc.get("place_name"),
-                                "category": doc.get("category_name"),
-                                "distance": int(doc.get("distance", 0)),
-                                "address": doc.get("address_name"),
-                                "road_address": doc.get("road_address_name"),
-                                "phone": doc.get("phone"),
-                                "place_url": doc.get("place_url"),
-                                "latitude": float(doc.get("y")),
-                                "longitude": float(doc.get("x")),
-                                "rating": rating
-                            })
-                        
-                        # 2단계: 각 매장에 대해 리뷰 생성
-                        print(f"[DEBUG] 리뷰 생성 중... ({len(stores)}개 매장 × {reviews_per_store}개 리뷰)", file=sys.stderr)
-                        
-                        review_gen = ReviewGenerator()
-                        enriched_result = review_gen.generate_stores_with_reviews(
-                            stores=stores,
-                            reviews_per_store=reviews_per_store
-                        )
-                        
-                        # 3단계: 최종 결과 구성
-                        result = {
+            # 최종 결과 구성
+            final_result = {
                             "query": {
                                 "latitude": lat,
                                 "longitude": lon,
                                 "category": category,
                                 "radius": radius
                             },
-                            "total_stores": enriched_result['total_stores'],
-                            "total_reviews": enriched_result['total_reviews'],
-                            "stores": enriched_result['stores'],
-                            "generated_at": enriched_result['generated_at'],
-                            "data_source": {
-                                "stores": "카카오맵 API (실제 데이터)",
-                                "reviews": "Mock 생성 데이터 (실제 크롤링 대체)"
-                            },
-                            "message": "✅ F&B 매장 검색 및 리뷰 수집 완료"
+                "total_stores": len(stores_list),
+                "total_reviews": sum(len(r) for r in reviews_dict.values()),
+                "stores": stores_list,
+                "reviews": reviews_dict,
+                "message": "✅ 네이버 API로 F&B 매장 검색 및 리뷰 수집 완료"
                         }
                         
-                        print(f"[DEBUG] 완료: {result['total_stores']}개 매장, {result['total_reviews']}개 리뷰", file=sys.stderr)
+            print(f"[DEBUG] 완료: {final_result['total_stores']}개 매장, {final_result['total_reviews']}개 리뷰", file=sys.stderr)
                         
                         return [TextContent(
                             type="text",
-                            text=json.dumps(result, ensure_ascii=False, indent=2)
-                        )]
-                    else:
-                        error_text = await response.text()
-                        return [TextContent(
-                            type="text",
-                            text=json.dumps({
-                                "error": f"❌ 카카오맵 API 호출 실패: {response.status}",
-                                "details": error_text
-                            }, ensure_ascii=False, indent=2)
+                text=json.dumps(final_result, ensure_ascii=False, indent=2)
                         )]
                         
         except Exception as e:
             import traceback
+            error_msg = f"❌ 오류 발생: {str(e)}"
+            print(f"[ERROR] {error_msg}", file=sys.stderr)
+            print(traceback.format_exc(), file=sys.stderr)
             return [TextContent(
                 type="text",
                 text=json.dumps({
-                    "error": f"❌ 오류 발생: {str(e)}",
+                    "error": error_msg,
                     "traceback": traceback.format_exc()
                 }, ensure_ascii=False, indent=2)
             )]

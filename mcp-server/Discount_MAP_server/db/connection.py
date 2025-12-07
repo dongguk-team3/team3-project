@@ -73,8 +73,7 @@ async def close_db_pool() -> None:
     if _pool is not None:
         await _pool.close()
         _pool = None
-        print("[DB] 커넥션 풀 종료 완료")
-
+        
 
 async def fetch(query: str, *args: Any) -> List[asyncpg.Record]:
     """
@@ -107,3 +106,12 @@ async def execute(query: str, *args: Any) -> str:
         raise RuntimeError("DB 커넥션 풀이 없습니다. init_db_pool()을 먼저 호출해야 합니다.")
     async with _pool.acquire() as conn:
         return await conn.execute(query, *args)
+
+
+def is_db_pool_initialized() -> bool:
+    """
+    현재 커넥션 풀이 초기화되어 있는지 여부.
+    - True  : 이미 init_db_pool()이 한 번이라도 호출됨
+    - False : 아직 아무도 풀을 만든 적 없음
+    """
+    return _pool is not None

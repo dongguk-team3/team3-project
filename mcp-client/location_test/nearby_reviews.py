@@ -162,7 +162,7 @@ def get_places_around(
         category_name = it.get("categoryName", "") or ""
         if place_type and (place_type not in category_name and place_type not in category_joined):
             continue
-
+        
         places.append(
             {
                 "id": it.get("id"),

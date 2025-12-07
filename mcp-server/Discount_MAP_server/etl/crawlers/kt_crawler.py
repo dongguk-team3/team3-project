@@ -152,3 +152,5 @@ if __name__ == "__main__":
     data = asyncio.run(fetch_kt_partners_all("C21"))
     print(f"총 {len(data)}개 수집됨")
     print(json.dumps(data[:5], ensure_ascii=False, indent=2))
+    with open("kt_brands.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)

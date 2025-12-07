@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 # Gemini API 설정
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBDBqnXPBmuc7rsEVchYZlJnPpBfs3Waro")
 
 try:
     import google.generativeai as genai
@@ -147,7 +147,7 @@ class InputValidator:
         if not user_profile:
             return True, "OK"
 
-        required_fields = ["userId", "telco"]
+        required_fields = ["telco"]
         for field in required_fields:
             if field not in user_profile:
                 return False, f"유저 프로필에 '{field}' 필드가 필요합니다."

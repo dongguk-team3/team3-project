@@ -232,5 +232,6 @@ if __name__ == "__main__":
     async def _test():
         data = await fetch_lpoint_fnb_affiliates()
         print(json.dumps(data, ensure_ascii=False, indent=2))
-
+        with open("lpoint_brands.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     asyncio.run(_test())

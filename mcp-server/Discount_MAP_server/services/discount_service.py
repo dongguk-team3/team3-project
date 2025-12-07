@@ -132,44 +132,38 @@ class DiscountService:
                 "discounts": [],
             }
 
-        # 1-2) 브랜드는 있으나, 지점명을 줬는데 그 지점이 없는 경우
-        if branch_name and branch_row is None:
-            brand_info = {
-                "brandId": brand_row["brand_id"],
-                "brandName": brand_row["brand_name"],
-                "brandOwner": brand_row["brand_owner"],
-            }
-            return {
-                "inputStoreName": store_str,
-                "matched": False,
-                "reason": "해당 지점을 찾을 수 없습니다. (브랜드는 존재함)",
-                "merchant": {
-                    "brand": brand_info,
-                    "branch": None,
-                },
-                "discounts": [],
-            }
-
-        # 1-3) 정상 매칭
+        # 1-2) 브랜드 정보 구성
         brand_info = {
             "brandId": brand_row["brand_id"],
             "brandName": brand_row["brand_name"],
             "brandOwner": brand_row["brand_owner"],
         }
+
         branch_info: Optional[Dict[str, Any]] = None
         branch_id: Optional[int] = None
+        reason: Optional[str] = None
 
+        # 1-3) 지점 처리
         if branch_row is not None:
+            # 지점까지 정상 매칭
             branch_id = branch_row["branch_id"]
             branch_info = {
                 "branchId": branch_row["branch_id"],
                 "branchName": branch_row["branch_name"],
             }
+            # reason = None (지점까지 매칭 성공)
+        elif branch_name:
+            # 지점명은 들어왔는데, 해당 지점이 없음 → 브랜드 기준으로만 할인 조회
+            reason = "해당 지점을 찾을 수 없습니다. (브랜드 기준 할인만 조회했습니다.)"
+            # branch_id = None 그대로 두고, brand_id 기준으로만 할인 검색
+        else:
+            # 지점명이 애초에 없었던 케이스: 브랜드 단위 조회
+            reason = None  # 굳이 메시지 안 넣어도 됨
 
-        # 2) 현재 시점에 적용 가능한 할인 프로그램 조회
+        # 2) 현재 시점에 적용 가능한 할인 프로그램 조회 (브랜드 + 선택적 지점)
         discounts_raw = await self._find_applicable_discounts(
             brand_id=brand_row["brand_id"],
-            branch_id=branch_id,
+            branch_id=branch_id,  # 지점 없으면 None → brand-only 할인 조회
             now=now,
         )
 
@@ -184,29 +178,67 @@ class DiscountService:
 
         return {
             "inputStoreName": store_str,
-            "matched": True,
-            "reason": None,
+            "matched": True,  # 브랜드는 어쨌든 매칭됨
+            "reason": reason,
             "merchant": {
                 "brand": brand_info,
                 "branch": branch_info,
             },
             "discounts": discounts_list,
         }
-
     # -------------------------------
     # 4. "브랜드 지점명" 문자열 파싱
     # -------------------------------
-    def _split_store_name(self, store_str: str) -> Tuple[str, Optional[str]]:
+        # -------------------------------
+    # 4. "브랜드 지점명" 문자열 파싱
+    # -------------------------------
+    def _split_store_name(self, store_name: str) -> Tuple[str, Optional[str]]:
         """
-        "스타벅스 동국대점" → ("스타벅스", "동국대점")
-        "이디야커피 충무로역점" → ("이디야커피", "충무로역점")
-        공백이 없으면 → ("스타벅스", None)
+        규칙:
+        1) '점'으로 끝나는 부분 전체를 branch 로 저장
+        2) branch 직전의 마지막 공백을 기준으로 brand / branch 를 분리
+
+        예)
+        - "투썸플레이스 강남역점" → ("투썸플레이스", "강남역점")
+        - "이디야커피 명동역 3번출구점" → ("이디야커피", "명동역 3번출구점")
+        - "멍키호두 강남역" → ("멍키호두 강남역", None)
         """
-        store_str = store_str.strip()
-        if " " not in store_str:
-            return store_str, None
-        brand_part, branch_part = store_str.split(" ", 1)
-        return brand_part.strip(), branch_part.strip()
+        name = (store_name or "").strip()
+
+        # 이름이 비었으면 그냥 None 리턴
+        if not name:
+            return "", None
+
+        # "점"이 아예 없으면 branch 없음
+        if "점" not in name:
+            return name, None
+
+        # 마지막 '점' 위치
+        dot_idx = name.rfind("점")
+        if dot_idx == -1:
+            return name, None
+
+        # '점'이 들어간 부분까지 우선 잘라서 후보 만들기
+        # ex) "투썸플레이스 강남역 11번출구점"
+        # raw = "투썸플레이스 강남역 11번출구점"
+        raw = name[: dot_idx + 1].strip()
+
+        # raw 안에서 마지막 공백 기준으로 brand / branch 분리
+        last_space = raw.rfind(" ")
+        if last_space == -1:
+            # 공백이 없으면 ("스타벅스점" 같은 이상한 케이스)
+            # 그냥 전체를 brand로 보고 branch 없음 처리
+            return raw, None
+
+        brand = raw[: last_space].strip()         # "투썸플레이스 강남역"
+        branch = raw[last_space + 1 :].strip()    # "11번출구점"
+
+        if not brand:
+            # brand가 비어버리는 이상한 케이스 방어
+            return name, branch or None
+
+        return brand, branch or None
+
 
     # -------------------------------
     # 5. 브랜드 + 지점 DB 조회
@@ -290,9 +322,6 @@ class DiscountService:
                 OR
                 -- 지점 지정
                 ($2::BIGINT IS NOT NULL AND dabr.branch_id = $2)
-                OR
-                -- 아무 대상도 지정되지 않은 경우(전 브랜드/전 지점)
-                (dab.discount_id IS NULL AND dabr.discount_id IS NULL)
               )
               AND (
                 dp.dow_mask IS NULL
@@ -378,7 +407,6 @@ class DiscountService:
         )
 
         return {
-            "discountId": discount_id,
             "discountName": discount_row["discount_name"],
             "providerType": provider_type,
             "providerName": provider_name,

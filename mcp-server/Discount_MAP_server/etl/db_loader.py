@@ -1,13 +1,5 @@
-# etl/db_loader.py
-"""
-정규화된 할인 JSON을 discountdb(PostgreSQL)에 적재하는 모듈.
-
-주의: 이제 discount_program 테이블에는
-- can_be_combined 컬럼이 없고
-- is_discount BOOLEAN 컬럼만 있다고 가정한다.
-"""
-
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, time
 
 from db.connection import fetchrow, fetch, execute
 
@@ -16,6 +8,34 @@ class DiscountDBLoader:
     """
     정규화된 할인 레코드들을 받아서 discountdb에 넣는 클래스.
     """
+    @staticmethod
+    def _to_time(value: Any) -> Optional[time]:
+        """
+        문자열 / datetime / time / None 을 받아서
+        datetime.time 또는 None 으로 변환한다.
+        """
+        if value is None or value == "":
+            
+            return None
+
+        if isinstance(value, time):
+            return value
+
+        if isinstance(value, datetime):
+            return value.time()
+
+        if isinstance(value, str):
+            # "HH:MM:SS" 또는 "HH:MM" 형식을 가정
+            try:
+                # 소수점(밀리초)이 붙어도 앞부분만 사용
+                base = value.split(".")[0]
+                return time.fromisoformat(base)
+            except ValueError:
+                print(f"[ETL] ⚠ time 파싱 실패: {value!r}")
+                return None
+
+        # 그 외 타입은 처리하지 않고 None
+        return None
 
     async def load_discounts(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         success_count = 0
@@ -38,18 +58,193 @@ class DiscountDBLoader:
         }
 
     async def _load_single_discount(self, rec: Dict[str, Any]) -> None:
-        provider_type = rec["providerType"]       # 'TELCO', 'PAYMENT', ...
+        """
+        한 개의 정규화된 할인 레코드를 받아서
+        - 브랜드/지점 upsert
+        - discount_provider + provider_detail upsert
+        - discount_program upsert (+ PER_UNIT rule)
+        - requiredConditions 매핑
+        - discount_applicable_brand / discount_applicable_branch 매핑
+        까지 한 번에 처리한다.
+        """
+        provider_type = rec["providerType"]       # 'TELCO', 'PAYMENT', 'MEMBERSHIP', 'AFFILIATION', ...
         provider_name = rec["providerName"].strip()
         discount_name = rec["discountName"].strip()
 
+        # 1) 브랜드 / 지점 upsert → brand_id, branch_id 반환 (없으면 None)
+        brand_id, branch_id = await self._upsert_brand_and_branch(rec)
+
+        # 2) 프로바이더 upsert
         provider_id = await self._get_or_create_provider(provider_type, provider_name)
+
+        # 2-1) 프로바이더 타입별 detail 테이블 upsert
+        await self._upsert_provider_detail(provider_type, provider_id, rec)
+
+        # 3) 할인 프로그램 upsert
         discount_id = await self._upsert_discount_program(provider_id, rec)
 
+        # 4) PER_UNIT 규칙이 있을 경우 discount_per_unit_rule upsert
         if rec.get("discountType") == "PER_UNIT" and rec.get("unitRule"):
             await self._upsert_per_unit_rule(discount_id, rec["unitRule"])
 
+        # 5) requiredConditions 매핑 (결제수단/통신사/멤버십/소속)
         req = rec.get("requiredConditions") or {}
         await self._apply_required_conditions(discount_id, req)
+
+        # 6) 브랜드/지점 적용 매핑
+        await self._link_discount_to_brand_branch(discount_id, brand_id, branch_id)
+
+    # ---------------- 브랜드 / 지점 ----------------
+
+    async def _upsert_brand_and_branch(self, rec: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+        """
+        rec 안의 merchant.brand / merchant.branch 정보를 보고
+        brand / brand_branch 를 upsert 한다.
+
+        반환: (brand_id, branch_id)
+        둘 중 없으면 None
+        """
+        merchant = rec.get("merchant") or {}
+
+        brand_info = merchant.get("brand") or {}
+        branch_info = merchant.get("branch") or {}
+
+        # brandName/Owner는 merchant.brand 기준, 없으면 top-level fallback
+        brand_name = brand_info.get("brandName") or rec.get("brandName")
+        brand_owner = brand_info.get("brandOwner") or rec.get("brandOwner")
+
+        if not brand_name:
+            # 브랜드 정보가 아예 없으면 아무 것도 안 만든다.
+            return None, None
+
+        # 1) brand upsert
+        row = await fetchrow(
+            """
+            SELECT brand_id
+            FROM brand
+            WHERE brand_name = $1
+              AND COALESCE(brand_owner, '') = COALESCE($2, '')
+            """,
+            brand_name,
+            brand_owner,
+        )
+        if row:
+            brand_id = row["brand_id"]
+        else:
+            row = await fetchrow(
+                """
+                INSERT INTO brand (brand_name, brand_owner)
+                VALUES ($1, $2)
+                RETURNING brand_id
+                """,
+                brand_name,
+                brand_owner,
+            )
+            brand_id = row["brand_id"]
+
+        # 2) branch upsert
+        # branchName은 merchant.branch 기준, 없으면 top-level fallback
+        branch_name_raw = branch_info.get("branchName") or rec.get("branchName")
+        if not branch_name_raw:
+            # 지점 정보가 없으면 branch는 만들지 않는다.
+            return brand_id, None
+
+        # branchName 이 list 인 케이스 (예: ["동국대후문", "충무필동"])
+        if isinstance(branch_name_raw, list):
+            branch_name = str(branch_name_raw[0])
+            print(f"[INFO] branchName 리스트 감지, 첫 번째 지점만 사용: {branch_name_raw} -> {branch_name}")
+        else:
+            branch_name = str(branch_name_raw)
+
+        lat = branch_info.get("latitude")
+        lon = branch_info.get("longitude")
+
+        # 먼저 기존 브랜치가 있는지 확인 (좌표 없어도 찾을 수 있게)
+        row = await fetchrow(
+            """
+            SELECT branch_id, latitude, longitude
+            FROM brand_branch
+            WHERE brand_id = $1
+              AND branch_name = $2
+            """,
+            brand_id,
+            branch_name,
+        )
+
+        if row:
+            branch_id = row["branch_id"]
+
+            # 새 좌표가 들어왔으면 업데이트
+            if lat is not None or lon is not None:
+                await execute(
+                    """
+                    UPDATE brand_branch
+                    SET latitude = $2,
+                        longitude = $3
+                    WHERE branch_id = $1
+                    """,
+                    branch_id,
+                    lat,
+                    lon,
+                )
+
+            return brand_id, branch_id
+
+        # 2-2) branch 신규 생성 (🔥 좌표 없어도 NULL로 생성)
+        print(f"[INFO] branch 신규 생성 (좌표 NULL 허용): brand={brand_name}, branch={branch_name}")
+
+        row = await fetchrow(
+            """
+            INSERT INTO brand_branch (
+              brand_id,
+              branch_name,
+              latitude,
+              longitude,
+              is_active
+            )
+            VALUES ($1,$2,$3,$4,TRUE)
+            RETURNING branch_id
+            """,
+            brand_id,
+            branch_name,
+            lat,
+            lon,
+        )
+
+        return brand_id, row["branch_id"]
+
+
+    async def _link_discount_to_brand_branch(
+        self,
+        discount_id: int,
+        brand_id: Optional[int],
+        branch_id: Optional[int],
+    ) -> None:
+        """
+        discount_applicable_brand / discount_applicable_branch 테이블에
+        이 할인 프로그램이 어떤 브랜드/지점에 적용되는지 매핑을 upsert 한다.
+        """
+        if brand_id is not None:
+            await execute(
+                """
+                INSERT INTO discount_applicable_brand (discount_id, brand_id, is_excluded)
+                VALUES ($1,$2,FALSE)
+                ON CONFLICT (discount_id, brand_id) DO NOTHING
+                """,
+                discount_id,
+                brand_id,
+            )
+
+        if branch_id is not None:
+            await execute(
+                """
+                INSERT INTO discount_applicable_branch (discount_id, branch_id)
+                VALUES ($1,$2)
+                ON CONFLICT (discount_id, branch_id) DO NOTHING
+                """,
+                discount_id,
+                branch_id,
+            )
 
     # ---------------- provider ----------------
 
@@ -78,16 +273,261 @@ class DiscountDBLoader:
         )
         return row["provider_id"]
 
-    # ---------------- discount_program (여기가 제일 중요) ----------------
+    async def _upsert_provider_detail(self, provider_type: str, provider_id: int, rec: Dict[str, Any]) -> None:
+        """
+        provider_type 에 따라 detail 테이블들을 upsert 한다.
+        - PAYMENT     → payment_provider_detail + payment_product
+        - MEMBERSHIP  → membership_provider_detail
+        - TELCO       → telco_provider_detail
+        - AFFILIATION → affiliation_provider_detail
+        """
+        if provider_type == "PAYMENT":
+            await self._upsert_payment_provider_detail_and_product(provider_id, rec)
+        elif provider_type == "MEMBERSHIP":
+            await self._upsert_membership_provider_detail(provider_id, rec)
+        elif provider_type == "TELCO":
+            await self._upsert_telco_provider_detail(provider_id, rec)
+        elif provider_type == "AFFILIATION":
+            await self._upsert_affiliation_provider_detail(provider_id, rec)
+        else:
+            # BRAND 등 다른 타입은 별도 detail 테이블이 없으니 스킵
+            return
+
+    async def _upsert_payment_provider_detail_and_product(
+        self,
+        provider_id: int,
+        rec: Dict[str, Any],
+    ) -> None:
+        """
+        카드사 크롤러(bccard, hyundaicard)용:
+        - payment_provider_detail (card_company_code)
+        - payment_product (개별 카드 상품)
+        upsert 처리.
+        """
+        # 카드사 코드 (예: 'KB', 'SHINHAN', 'BC', ...)
+        card_company_code = rec.get("cardCompanyCode") or rec.get("providerCode")
+
+        if card_company_code:
+            row = await fetchrow(
+                """
+                SELECT provider_id
+                FROM payment_provider_detail
+                WHERE provider_id = $1
+                """,
+                provider_id,
+            )
+            if row:
+                await execute(
+                    """
+                    UPDATE payment_provider_detail
+                    SET card_company_code = $2
+                    WHERE provider_id = $1
+                    """,
+                    provider_id,
+                    card_company_code,
+                )
+            else:
+                await execute(
+                    """
+                    INSERT INTO payment_provider_detail (provider_id, card_company_code)
+                    VALUES ($1,$2)
+                    """,
+                    provider_id,
+                    card_company_code,
+                )
+
+        # 개별 카드 상품 (예: "더모아카드", "BLISS.7 카드" 등)
+        payment_name = rec.get("paymentName")
+        payment_company = rec.get("paymentCompany")
+
+        if payment_name:
+            row = await fetchrow(
+                """
+                SELECT payment_id
+                FROM payment_product
+                WHERE provider_id = $1
+                  AND payment_name = $2
+                """,
+                provider_id,
+                payment_name,
+            )
+            if row:
+                # 회사명이 바뀌었으면 업데이트
+                if payment_company:
+                    await execute(
+                        """
+                        UPDATE payment_product
+                        SET payment_company = $3
+                        WHERE provider_id = $1
+                          AND payment_name = $2
+                        """,
+                        provider_id,
+                        payment_name,
+                        payment_company,
+                    )
+            else:
+                await execute(
+                    """
+                    INSERT INTO payment_product (provider_id, payment_name, payment_company)
+                    VALUES ($1,$2,$3)
+                    """,
+                    provider_id,
+                    payment_name,
+                    payment_company,
+                )
+
+    async def _upsert_membership_provider_detail(self, provider_id: int, rec: Dict[str, Any]) -> None:
+        """
+        멤버십 크롤러(cjone, happypoint, lpoint)용:
+        membership_provider_detail upsert.
+        """
+        membership_name = rec.get("membershipName") or rec.get("providerName")
+        membership_level_required = rec.get("membershipLevelRequired") or rec.get("requiredLevel")
+
+        if not membership_name:
+            return
+
+        row = await fetchrow(
+            """
+            SELECT provider_id
+            FROM membership_provider_detail
+            WHERE provider_id = $1
+            """,
+            provider_id,
+        )
+        if row:
+            await execute(
+                """
+                UPDATE membership_provider_detail
+                SET membership_name = $2,
+                    membership_level_required = $3
+                WHERE provider_id = $1
+                """,
+                provider_id,
+                membership_name,
+                membership_level_required,
+            )
+        else:
+            await execute(
+                """
+                INSERT INTO membership_provider_detail (
+                  provider_id,
+                  membership_name,
+                  membership_level_required
+                )
+                VALUES ($1,$2,$3)
+                """,
+                provider_id,
+                membership_name,
+                membership_level_required,
+            )
+
+    async def _upsert_telco_provider_detail(self, provider_id: int, rec: Dict[str, Any]) -> None:
+        """
+        통신사 크롤러(kt, lguplus, skt)용:
+        telco_provider_detail upsert.
+        """
+        # telco_name: 'SKT', 'KT', 'LG U+'
+        telco_name = rec.get("telcoName") or rec.get("providerName")
+        # 앱 이름: 'T 멤버십', 'KT 멤버십', 'U+ 멤버스' 등
+        telco_app_name = rec.get("telcoAppName") or rec.get("telcoMembershipName")
+        membership_level_required = rec.get("membershipLevelRequired") or rec.get("requiredLevel")
+
+        if not telco_name or not telco_app_name:
+            # 둘 중 하나라도 없으면 detail은 만들지 않음
+            return
+
+        row = await fetchrow(
+            """
+            SELECT provider_id
+            FROM telco_provider_detail
+            WHERE provider_id = $1
+            """,
+            provider_id,
+        )
+        if row:
+            await execute(
+                """
+                UPDATE telco_provider_detail
+                SET membership_level_required = $2,
+                    telco_name = $3,
+                    telco_app_name = $4
+                WHERE provider_id = $1
+                """,
+                provider_id,
+                membership_level_required,
+                telco_name,
+                telco_app_name,
+            )
+        else:
+            await execute(
+                """
+                INSERT INTO telco_provider_detail (
+                  provider_id,
+                  membership_level_required,
+                  telco_name,
+                  telco_app_name
+                )
+                VALUES ($1,$2,$3,$4)
+                """,
+                provider_id,
+                membership_level_required,
+                telco_name,
+                telco_app_name,
+            )
+
+    async def _upsert_affiliation_provider_detail(self, provider_id: int, rec: Dict[str, Any]) -> None:
+        """
+        AFFILIATION 타입(동국대학교 등)용:
+        affiliation_provider_detail upsert.
+        """
+        organization_name = rec.get("organizationName") or rec.get("providerName")
+        eligibility_rule = rec.get("eligibilityRule") or rec.get("qualification")
+
+        if not organization_name:
+            return
+
+        row = await fetchrow(
+            """
+            SELECT provider_id
+            FROM affiliation_provider_detail
+            WHERE provider_id = $1
+            """,
+            provider_id,
+        )
+        if row:
+            await execute(
+                """
+                UPDATE affiliation_provider_detail
+                SET organization_name = $2,
+                    eligibility_rule = $3
+                WHERE provider_id = $1
+                """,
+                provider_id,
+                organization_name,
+                eligibility_rule,
+            )
+        else:
+            await execute(
+                """
+                INSERT INTO affiliation_provider_detail (
+                  provider_id,
+                  organization_name,
+                  eligibility_rule
+                )
+                VALUES ($1,$2,$3)
+                """,
+                provider_id,
+                organization_name,
+                eligibility_rule,
+            )
+
+    # ---------------- discount_program (기존 + is_discount) ----------------
 
     async def _upsert_discount_program(self, provider_id: int, rec: Dict[str, Any]) -> int:
         """
         discount_program에 (provider_id, discount_name)을 기준으로
         이미 있으면 UPDATE, 없으면 INSERT.
-
-        🔴 변경사항:
-        - can_be_combined → is_discount (BOOLEAN)
-        - 정규화 JSON에서 rec["isDiscount"]를 읽어서 저장
         """
         discount_name = rec["discountName"].strip()
 
@@ -102,6 +542,9 @@ class DiscountDBLoader:
             discount_name,
         )
 
+        time_from = self._to_time(rec.get("timeFrom"))
+        time_to = self._to_time(rec.get("timeTo"))
+
         params = {
             "provider_id": provider_id,
             "discount_name": discount_name,
@@ -112,18 +555,16 @@ class DiscountDBLoader:
             "valid_from": rec.get("validFrom"),
             "valid_to": rec.get("validTo"),
             "dow_mask": rec.get("dowMask"),
-            "time_from": rec.get("timeFrom"),
-            "time_to": rec.get("timeTo"),
+            "time_from": time_from,
+            "time_to": time_to,
             "channel_limit": rec.get("channelLimit"),
             "qualification": rec.get("qualification"),
             "application_menu": rec.get("applicationMenu"),
-            # ✅ 새 컬럼: is_discount (정규화 JSON의 isDiscount 사용, 기본값 True)
             "is_discount": bool(rec.get("isDiscount", True)),
         }
 
         if existing:
             discount_id = existing["discount_id"]
-            # ✅ UPDATE 시에도 is_discount 갱신
             await execute(
                 """
                 UPDATE discount_program
@@ -160,7 +601,6 @@ class DiscountDBLoader:
             )
             return discount_id
         else:
-            # ✅ INSERT 시에도 is_discount 넣기
             row = await fetchrow(
                 """
                 INSERT INTO discount_program (
@@ -204,7 +644,7 @@ class DiscountDBLoader:
             )
             return row["discount_id"]
 
-    # ---------------- 이하 그대로 (PER_UNIT, requiredConditions, helper들) ----------------
+    # ---------------- PER_UNIT, requiredConditions, helper들 (기존 유지) ----------------
 
     async def _upsert_per_unit_rule(self, discount_id: int, unit_rule: Dict[str, Any]) -> None:
         existing = await fetchrow(
