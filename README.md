@@ -1,13 +1,10 @@
 
 ## 👀 데모 & 자료 (추가 예정)
 
-  - 아키텍처 다이어그램: `docs/architecture.png` (TODO)
   - 앱 스크린샷: `docs/screens/` (TODO)
   - 시연 영상: `https://youtu.be/...` (TODO) 
   - (시연 영상 대표 이미지)](유튜브 링크)(TODO)
   - 스크린샷 추가 예정 (TODO)
-  - 서버 전체 구조도(TODO)
-  - 서버 세부 구조도1, 2(TODO)
 
 ---
 
@@ -110,15 +107,12 @@ graph TD
 
 ---
 
-## 5. 서버 전체 구조
+## 5. 서버 세부 구조
 
-서버 전체 구조도(TODO)
-
-## 6. 서버 세부 구조
-
-서버 세부 구조도1(TODO)
-
-서버 세부 구조도2(TODO)
+RAG Pipeline 1
+![image](docs/1~2step.png.png)
+RAG Pipeline 2
+![image](docs/3~5step.png.png)
 
 ## 🚀 핵심 기능
 
@@ -132,7 +126,7 @@ graph TD
 
 ## 🧭 시스템 파이프라인
 
-아키텍처 다이어그램(TODO): ![image](docs/main_pipeline.png)
+아키텍처 다이어그램: ![image](docs/main_pipeline.png)
 
 1. **ChatFilter**: 프롬프트 검증/키워드 추출(Gemini) → `place_type`, `attributes`, `location`.
 2. **Location Server**: 네이버맵 API로 매장/거리/리뷰 수집.
