@@ -110,9 +110,9 @@ graph TD
 ## 5. 서버 세부 구조
 
 RAG Pipeline 1
-![image](docs/1~2step.png.png)
+![image](docs/1~2step.png)
 RAG Pipeline 2
-![image](docs/3~5step.png.png)
+![image](docs/3~5step.png)
 
 ## 🚀 핵심 기능
 
