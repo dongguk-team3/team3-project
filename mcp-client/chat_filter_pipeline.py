@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 # Gemini API 설정
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBDBqnXPBmuc7rsEVchYZlJnPpBfs3Waro")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 try:
     import google.generativeai as genai
