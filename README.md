@@ -2,11 +2,8 @@
 ## 👀 데모 & 자료 (추가 예정)
 
   - 아키텍처 다이어그램: `docs/architecture.png` (TODO)
-  - 서비스 플로우/시퀀스: `docs/sequence.png` (TODO)
   - 앱 스크린샷: `docs/screens/` (TODO)
-  - 시연 영상: `https://youtu.be/...` (TODO)
-  - 제목수정 및 프로젝트 대표 이미지 추가 (TODO)
-  - 프로젝트 구조도 (TODO)
+  - 시연 영상: `https://youtu.be/...` (TODO) 
   - (시연 영상 대표 이미지)](유튜브 링크)(TODO)
   - 스크린샷 추가 예정 (TODO)
   - 서버 전체 구조도(TODO)
@@ -46,7 +43,7 @@
 
 ## 1. 프로젝트 명
 
-위치 기반 할인 추천 서비스 (TODO)
+사용자 대화형 위치 기반 할인 추천 서비스
 
 ![aaa](docs/BANNER.png)
 
