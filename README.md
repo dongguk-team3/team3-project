@@ -132,6 +132,8 @@ graph TD
 
 ## 🧭 시스템 파이프라인
 
+아키텍처 다이어그램(TODO): ![image](docs/main_pipeline.png)
+
 1. **ChatFilter**: 프롬프트 검증/키워드 추출(Gemini) → `place_type`, `attributes`, `location`.
 2. **Location Server**: 네이버맵 API로 매장/거리/리뷰 수집.
 3. **Discount Server**: 사용자 프로필 + 매장명으로 적용 가능한 할인 후보 계산(PostgreSQL).
@@ -139,7 +141,7 @@ graph TD
 5. **RAG & LLM**: 추천/리뷰를 임베딩 → 컨텍스트 → OpenAI/Gemini 답변.
 6. **App**: 지도/리스트/채팅 UI로 결과 표시.
 
-아키텍처 다이어그램(TODO): `docs/architecture.png`
+
 
 ---
 
