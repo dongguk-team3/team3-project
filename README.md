@@ -56,7 +56,39 @@
 
 ## 3. 프로젝트 구조도
 
-![image](프로젝트 구조도 (TODO))
+```mermaid
+graph TD
+    %% 스타일 정의
+    classDef client fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef server fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+    classDef ai fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+
+    User(["👤 User"]) --> App["📱 Android App<br/>(Flutter/Kotlin)"]:::client
+    
+    subgraph "MCP Client Layer"
+        App --> ChatFilter["🛡️ Chat Filter<br/>(Prompt Guard)"]:::client
+        ChatFilter --> Orchestrator["🎮 MCP Client<br/>(Orchestrator)"]:::client
+    end
+
+    subgraph "MCP Server Layer (Microservices)"
+        Orchestrator --> Loc["📍 Location Server<br/>(Naver Map API)"]:::server
+        Orchestrator --> Disc["💰 Discount Server<br/>(Crawling/ETL)"]:::server
+        Orchestrator --> Rec["🏆 Recommendation Server<br/>(Sorting Logic)"]:::server
+    end
+
+    subgraph "Data Layer"
+        Disc <--> DB[("PostgreSQL<br/>Discount DB")]:::db
+    end
+
+    subgraph "AI Intelligence Layer"
+        Rec --> RAG["🧠 RAG Pipeline<br/>(Review Analysis)"]:::ai
+        RAG <--> VectorDB[("ChromaDB<br/>Vector Store")]:::db
+        RAG --> LLM["🤖 LLM Responder<br/>(OpenAI/Gemini)"]:::ai
+    end
+
+    LLM --> App
+```
 
 ## 4. 시연 영상 및 구동화면
 
