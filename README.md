@@ -71,7 +71,7 @@ graph TD
         ChatFilter --> Orchestrator["🎮 MCP Client<br/>(Orchestrator)"]:::client
     end
 
-    subgraph "MCP Server Layer (Microservices)"
+    subgraph "MCP Server Layer "
         Orchestrator --> Loc["📍 Location Server<br/>(Naver Map API)"]:::server
         Orchestrator --> Disc["💰 Discount Server<br/>(Crawling/ETL)"]:::server
         Orchestrator --> Rec["🏆 Recommendation Server<br/>(Sorting Logic)"]:::server
