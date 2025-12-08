@@ -118,7 +118,7 @@ RAG Pipeline 2
 
 - **위치·리뷰 수집**: 네이버맵 기반 주변 매장 검색 + 리뷰 크롤링 (`mcp-server/Location_server`).
 - **할인 매칭**: 사용자 프로필의 통신사/멤버십/카드/소속 조건을 PostgreSQL 할인 DB와 매칭 (`mcp-server/Discount_MAP_server`).
-- **추천 엔진**: 사용자 선호도(가성비/분위기/모임), 거리·할인율 기반 정렬, 프랜차이즈/자영업 필터 (`mcp-server/recommend_server`).
+- **추천 엔진**: 사용자 선호도(가성비/분위기/모임), 거리·할인율 기반 정렬 (`mcp-server/recommend_server`).
 - **LLM/RAG 응답**: Gemini 임베딩 + Chroma로 컨텍스트 구성 후 OpenAI/Gemini로 자연어 답변 (`mcp-client/RAG`, `mcp-client/mcp_client.py`).
 - **모바일 앱**: Naver Maps 기반 UI, 프로필 온보딩, 채팅/추천 호출 (`app/src/main/java/com/example/discountapp`).
 
@@ -131,7 +131,7 @@ RAG Pipeline 2
 1. **ChatFilter**: 프롬프트 검증/키워드 추출(Gemini) → `place_type`, `attributes`, `location`.
 2. **Location Server**: 네이버맵 API로 매장/거리/리뷰 수집.
 3. **Discount Server**: 사용자 프로필 + 매장명으로 적용 가능한 할인 후보 계산(PostgreSQL).
-4. **Recommendation Server**: 선호도/거리/할인율 기반 랭킹 + 프랜차이즈 필터.
+4. **Recommendation Server**: 선호도/거리/할인율 기반 랭킹.
 5. **RAG & LLM**: 추천/리뷰를 임베딩 → 컨텍스트 → OpenAI/Gemini 답변.
 6. **App**: 지도/리스트/채팅 UI로 결과 표시.
 
@@ -144,6 +144,6 @@ RAG Pipeline 2
 - `mcp-client/` : FastAPI + MCP 총괄, ChatFilter, RAG, REST 엔드포인트(`/api/recommend`).
 - `mcp-server/Location_server/` : 네이버맵 기반 위치/리뷰 크롤링 서버(MCP).
 - `mcp-server/Discount_MAP_server/` : 할인 DB, ETL, MCP 도구 `get_discounts_for_stores`.
-- `mcp-server/recommend_server/` : 할인 계산/정렬/프랜차이즈 필터링.
+- `mcp-server/recommend_server/` : 할인 계산/정렬
 
 ---
