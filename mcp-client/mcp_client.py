@@ -719,7 +719,7 @@ class LLMEngine:
                     "mcp_results": mcp_results,
                 "error": location_payload.get("error"),
                 }
-            
+        print(f"stores: {stores}")
          
             ## 위와 같은 구현을 할 건데 다음 모드로 넘어갈 결과값을 구현하면 됨.
         

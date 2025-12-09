@@ -157,7 +157,8 @@ def get_places_around(
             continue
         if dist_m > radius_m:
             continue
-
+        if it.get("name") and "스터디" in it.get("name"):
+            continue
         category_joined = ",".join(it.get("category") or [])
         category_name = it.get("categoryName", "") or ""
         if place_type and (place_type not in category_name and place_type not in category_joined):
