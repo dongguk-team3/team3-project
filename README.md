@@ -146,5 +146,6 @@ RAG Pipeline 2
 - `mcp-server/Location_server/` : 네이버맵 기반 위치/리뷰 크롤링 서버(MCP).
 - `mcp-server/Discount_MAP_server/` : 할인 DB, ETL, MCP 도구 `get_discounts_for_stores`.
 - `mcp-server/recommend_server/` : 할인 계산/정렬
+- `docs/응답결과요약.pdf`: 설문조사 결과 요약.
 
 ---
