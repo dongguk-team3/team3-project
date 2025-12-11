@@ -94,16 +94,19 @@ graph TD
 ### 스크린 샷
 
 ### 1️⃣ 메인 화면
+![image](docs/profile.jpg) ![image](docs/profile2.jpg) ![image](docs/main.jpg)
+---|---|---|
 
-(스크린샷 추가 예정)(TODO)
+### 2️⃣ 채팅화면 2️⃣
 
-### 2️⃣ 지도 화면
+![image](docs/ui_input.jpg) ![image](docs/chat.jpg)
+---|---|
 
-(스크린샷 추가 예정)
+### 3️⃣ 지도 화면
 
-### 3️⃣ 채팅화면
+![image](docs/map_detail.jpg) ![image](docs/map.jpg)
+---|---|
 
-(스크린샷 추가 예정)(TODO)
 
 ---
 
