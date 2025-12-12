@@ -1,10 +1,4 @@
 
-## 👀 데모 & 자료 (추가 예정)
-
-  - 시연 영상: `https://youtu.be/...` (TODO) 
-  - (시연 영상 대표 이미지)](유튜브 링크)(TODO)
-
----
 
 ## 👋 팀원 소개
 
@@ -86,7 +80,7 @@ graph TD
 
 ```markdown
 
-[![IMAGE ALT TEXT HERE](시연 영상 대표 이미지)](유튜브 링크)(TODO)
+![IMAGE ALT TEXT HERE](시연 영상 대표 이미지)](https://youtu.be/OgTnuBROMvE) 
 ```
 
 ### 스크린 샷
