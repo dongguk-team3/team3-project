@@ -78,10 +78,10 @@ graph TD
 
 ## 4. 시연 영상 및 구동화면
 
-```markdown
 
-![IMAGE ALT TEXT HERE](시연 영상 대표 이미지)](https://youtu.be/OgTnuBROMvE) 
-```
+
+[![example](docs/thumb.webp)](https://youtu.be/OgTnuBROMvE) 
+
 
 ### 스크린 샷
 
